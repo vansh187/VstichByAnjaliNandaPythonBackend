@@ -1,0 +1,39 @@
+create_table: |
+  CREATE TABLE IF NOT EXISTS VStitch_Users (
+      VstitchUserId    BIGSERIAL     PRIMARY KEY,
+      VstitchUserName  VARCHAR(250)  NOT NULL,
+      VstitchPassword  VARCHAR(250)  NOT NULL,
+      FirstName        VARCHAR(250)  NOT NULL,
+      LastName         VARCHAR(250)  NOT NULL,
+      Email            VARCHAR(250)  NOT NULL,
+      PhoneNumber      VARCHAR(250)  NOT NULL,
+      created_by       VARCHAR(250)  NOT NULL,
+      created_date     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by       VARCHAR(250),
+      updated_date     TIMESTAMP,
+
+      CONSTRAINT uq_vstitch_users_username UNIQUE (VstitchUserName),
+      CONSTRAINT uq_vstitch_users_email UNIQUE (Email),
+      CONSTRAINT uq_vstitch_users_phone UNIQUE (PhoneNumber)
+  );
+
+check_username_exists: |
+  SELECT VstitchUserId FROM VStitch_Users WHERE VstitchUserName = %s;
+
+check_email_exists: |
+  SELECT VstitchUserId FROM VStitch_Users WHERE Email = %s;
+
+check_phone_exists: |
+  SELECT VstitchUserId FROM VStitch_Users WHERE PhoneNumber = %s;
+
+insert_user: |
+  INSERT INTO VStitch_Users
+      (VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber, created_by, created_date)
+  VALUES
+      (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+  RETURNING VstitchUserId, VstitchUserName, Email, created_date;
+
+get_user_by_username: |
+  SELECT VstitchUserId, VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber
+  FROM VStitch_Users
+  WHERE VstitchUserName = %s;
