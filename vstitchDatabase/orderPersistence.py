@@ -34,6 +34,64 @@ class OrderPersistence:
             )
             return {row[0]: dict(zip(column_names, row)) for row in variant_rows}
 
+    def get_orders_for_user(self, vstitch_user_id, before_id, limit_plus_one):
+        """Fetches one page of a user's order headers, newest first, keyset-paginated
+        on VstitchOrderId (< before_id). Requests limit_plus_one rows so the caller
+        can detect has_more without a separate COUNT query."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("get_orders_for_user"),
+                    {
+                        "vstitch_user_id": vstitch_user_id,
+                        "before_id": before_id,
+                        "limit_plus_one": limit_plus_one,
+                    },
+                )
+                order_rows = cursor.fetchall()
+            column_names = (
+                "vstitch_order_id",
+                "order_status",
+                "payment_method",
+                "total_amount",
+                "shipping_recipient_name",
+                "shipping_address_line1",
+                "shipping_address_line2",
+                "shipping_city",
+                "shipping_state",
+                "shipping_postal_code",
+                "shipping_country",
+                "shipping_phone_number",
+                "created_date",
+            )
+            return [dict(zip(column_names, row)) for row in order_rows]
+
+    def get_order_items_for_orders(self, vstitch_order_ids):
+        """Bulk-fetches line items for a page of orders in one round trip, keyed by
+        order id, instead of one query per order."""
+        if not vstitch_order_ids:
+            return {}
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("get_order_items_for_orders"),
+                    (vstitch_order_ids,),
+                )
+                item_rows = cursor.fetchall()
+            items_by_order_id = {}
+            for row in item_rows:
+                items_by_order_id.setdefault(row[0], []).append(
+                    {
+                        "vstitch_product_variant_id": row[1],
+                        "product_name": row[2],
+                        "size": row[3],
+                        "color": row[4],
+                        "unit_price": row[5],
+                        "quantity": row[6],
+                    }
+                )
+            return items_by_order_id
+
     def create_cod_order(
         self,
         vstitch_user_id,

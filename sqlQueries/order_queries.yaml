@@ -19,6 +19,23 @@ insert_order_items_bulk: |
        UnitPriceSnapshot, Quantity, created_by)
   VALUES %s;
 
+get_orders_for_user: |
+  SELECT VstitchOrderId, OrderStatus, PaymentMethod, TotalAmount, ShippingRecipientName, ShippingAddressLine1,
+         ShippingAddressLine2, ShippingCity, ShippingState, ShippingPostalCode, ShippingCountry, ShippingPhoneNumber,
+         created_date
+  FROM VStitch_Orders
+  WHERE VstitchUserId = %(vstitch_user_id)s
+    AND (%(before_id)s::BIGINT IS NULL OR VstitchOrderId < %(before_id)s)
+  ORDER BY VstitchOrderId DESC
+  LIMIT %(limit_plus_one)s;
+
+get_order_items_for_orders: |
+  SELECT VstitchOrderId, VstitchProductVariantId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,
+         UnitPriceSnapshot, Quantity
+  FROM VStitch_OrderItems
+  WHERE VstitchOrderId = ANY(%s)
+  ORDER BY VstitchOrderId, VstitchOrderItemId;
+
 decrement_variant_stock_bulk: |
   UPDATE VStitch_ProductVariants pv
   SET StockQuantity = pv.StockQuantity - req.qty,

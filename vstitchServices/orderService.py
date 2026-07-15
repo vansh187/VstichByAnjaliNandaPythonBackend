@@ -1,10 +1,15 @@
 from vstitchDatabase.orderPersistence import OrderPersistence
-from vstitchDTO.orderResponseDTO import CreateOrderResponseDTO, OrderItemResponseDTO
+from vstitchDTO.orderResponseDTO import (
+    CreateOrderResponseDTO,
+    OrderDetailResponseDTO,
+    OrderItemResponseDTO,
+    OrderListResponseDTO,
+)
 from vstitchServices.localCacheService import local_cache_service
 
 
 class OrderService:
-    """Business logic for placing a cash-on-delivery order."""
+    """Business logic for placing and retrieving cash-on-delivery orders."""
 
     def __init__(self):
         self.order_persistence = OrderPersistence()
@@ -92,6 +97,60 @@ class OrderService:
             ],
             message="Order placed successfully. Pay cash on delivery.",
         )
+
+    def list_orders_for_user(self, vstitch_user_id, before_id, limit):
+        """Returns one page of the calling user's order history, newest first,
+        each order with its full line-item detail. Keyset-paginated on
+        VstitchOrderId rather than OFFSET, so pages stay fast and stable even as
+        new orders are placed between page fetches.
+        """
+        order_rows = self.order_persistence.get_orders_for_user(vstitch_user_id, before_id, limit + 1)
+        has_more = len(order_rows) > limit
+        page_rows = order_rows[:limit]
+
+        # Single bulk fetch for every order on this page, instead of one
+        # round trip per order - keeps this endpoint at 2 queries total
+        # regardless of page size.
+        items_by_order_id = self.order_persistence.get_order_items_for_orders(
+            [order_row["vstitch_order_id"] for order_row in page_rows]
+        )
+
+        orders = [
+            OrderDetailResponseDTO(
+                vstitch_order_id=order_row["vstitch_order_id"],
+                order_status=order_row["order_status"],
+                payment_method=order_row["payment_method"],
+                total_amount=order_row["total_amount"],
+                shipping_recipient_name=order_row["shipping_recipient_name"],
+                shipping_address_line1=order_row["shipping_address_line1"],
+                shipping_address_line2=order_row["shipping_address_line2"],
+                shipping_city=order_row["shipping_city"],
+                shipping_state=order_row["shipping_state"],
+                shipping_postal_code=order_row["shipping_postal_code"],
+                shipping_country=order_row["shipping_country"],
+                shipping_phone_number=order_row["shipping_phone_number"],
+                created_date=order_row["created_date"],
+                items=[
+                    OrderItemResponseDTO(
+                        vstitch_product_variant_id=item["vstitch_product_variant_id"],
+                        product_name=item["product_name"],
+                        size=item["size"],
+                        color=item["color"],
+                        unit_price=item["unit_price"],
+                        quantity=item["quantity"],
+                        line_total=item["unit_price"] * item["quantity"],
+                    )
+                    for item in items_by_order_id.get(order_row["vstitch_order_id"], [])
+                ],
+            )
+            for order_row in page_rows
+        ]
+
+        # Cursor for the next page is the last (oldest) order id on this page -
+        # None whenever there's nothing left to fetch.
+        next_cursor = page_rows[-1]["vstitch_order_id"] if has_more and page_rows else None
+
+        return OrderListResponseDTO(orders=orders, has_more=has_more, next_cursor=next_cursor)
 
     def _evict_sold_out_products_from_cache(self, order_items, remaining_stock_by_variant_id):
         """If this order took a variant's stock to 0, don't leave the catalog
