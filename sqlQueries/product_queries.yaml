@@ -45,6 +45,40 @@ list_products_page: |
   ORDER BY p.VstitchProductId ASC
   LIMIT %(limit_plus_one)s;
 
+get_products_by_ids: |
+  SELECT
+      p.VstitchProductId,
+      p.ProductName,
+      p.VstitchCategoryId,
+      c.CategoryName,
+      price_stats.min_price,
+      price_stats.max_price,
+      price_stats.in_stock,
+      color_list.colors,
+      img.image_url
+  FROM VStitch_Products p
+  JOIN VStitch_Categories c ON c.VstitchCategoryId = p.VstitchCategoryId
+  JOIN LATERAL (
+      SELECT MIN(pv.Price) AS min_price, MAX(pv.Price) AS max_price, BOOL_OR(pv.StockQuantity > 0) AS in_stock
+      FROM VStitch_ProductVariants pv
+      WHERE pv.VstitchProductId = p.VstitchProductId AND pv.IsActive = TRUE
+  ) price_stats ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT ARRAY_AGG(DISTINCT pv.Color ORDER BY pv.Color) AS colors
+      FROM VStitch_ProductVariants pv
+      WHERE pv.VstitchProductId = p.VstitchProductId AND pv.IsActive = TRUE
+  ) color_list ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT pi.ImageUrl AS image_url
+      FROM VStitch_ProductImages pi
+      WHERE pi.VstitchProductId = p.VstitchProductId
+      ORDER BY pi.IsPrimary DESC, pi.DisplayOrder ASC
+      LIMIT 1
+  ) img ON TRUE
+  WHERE p.IsActive = TRUE
+    AND price_stats.min_price IS NOT NULL
+    AND p.VstitchProductId = ANY(%s);
+
 get_product_by_id: |
   SELECT p.VstitchProductId, p.ProductName, p.Description, p.VstitchCategoryId, c.CategoryName, p.BasePrice
   FROM VStitch_Products p

@@ -1,0 +1,34 @@
+get_top_selling_product_ids: |
+  SELECT pv.VstitchProductId,
+         SUM(oi.Quantity) AS units_sold,
+         SUM(oi.Quantity * oi.UnitPriceSnapshot) AS revenue
+  FROM VStitch_OrderItems oi
+  JOIN VStitch_Orders o ON o.VstitchOrderId = oi.VstitchOrderId
+  JOIN VStitch_ProductVariants pv ON pv.VstitchProductVariantId = oi.VstitchProductVariantId
+  JOIN VStitch_Products p ON p.VstitchProductId = pv.VstitchProductId AND p.IsActive = TRUE
+  WHERE o.OrderStatus NOT IN ('cancelled', 'delivery_failed')
+    AND (%(since_date)s::TIMESTAMP IS NULL OR o.created_date >= %(since_date)s)
+    AND NOT (pv.VstitchProductId = ANY(%(exclude_ids)s))
+    -- Rank only products that are actually buyable right now, not just when
+    -- the historical order was placed - a product can be deactivated, or
+    -- every variant sold out/deactivated, after the sales that earned it
+    -- this ranking.
+    AND EXISTS (
+        SELECT 1 FROM VStitch_ProductVariants pv2
+        WHERE pv2.VstitchProductId = pv.VstitchProductId AND pv2.IsActive = TRUE
+    )
+  GROUP BY pv.VstitchProductId
+  ORDER BY units_sold DESC, revenue DESC, pv.VstitchProductId ASC
+  LIMIT %(limit)s;
+
+get_newest_active_product_ids: |
+  SELECT p.VstitchProductId
+  FROM VStitch_Products p
+  WHERE p.IsActive = TRUE
+    AND NOT (p.VstitchProductId = ANY(%(exclude_ids)s))
+    AND EXISTS (
+        SELECT 1 FROM VStitch_ProductVariants pv
+        WHERE pv.VstitchProductId = p.VstitchProductId AND pv.IsActive = TRUE
+    )
+  ORDER BY p.VstitchProductId DESC
+  LIMIT %(limit)s;

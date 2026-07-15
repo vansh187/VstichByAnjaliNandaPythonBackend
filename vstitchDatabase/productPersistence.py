@@ -1,6 +1,18 @@
 from vstitchDatabase.ConnectionFactory import connection_factory
 from vstitchDatabase.queryLoader import QueryLoader
 
+PRODUCT_CARD_COLUMNS = (
+    "vstitch_product_id",
+    "product_name",
+    "vstitch_category_id",
+    "category_name",
+    "min_price",
+    "max_price",
+    "in_stock",
+    "colors",
+    "image_url",
+)
+
 
 class ProductPersistence:
     """Database logic backing catalog browsing against VStitch_Products/Variants/Images."""
@@ -23,18 +35,23 @@ class ProductPersistence:
                     },
                 )
                 rows = cursor.fetchall()
-            column_names = (
-                "vstitch_product_id",
-                "product_name",
-                "vstitch_category_id",
-                "category_name",
-                "min_price",
-                "max_price",
-                "in_stock",
-                "colors",
-                "image_url",
-            )
-            return [dict(zip(column_names, row)) for row in rows]
+            return [dict(zip(PRODUCT_CARD_COLUMNS, row)) for row in rows]
+
+    def get_products_by_ids(self, vstitch_product_ids):
+        """Bulk card-shape fetch for an arbitrary set of product ids - used
+        wherever a ranked/curated id list needs to become full card data (best
+        sellers today; related products later). Does not preserve the input
+        order - callers that care about ranking must reorder the result."""
+        if not vstitch_product_ids:
+            return {}
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("get_products_by_ids"),
+                    (list(vstitch_product_ids),),
+                )
+                rows = cursor.fetchall()
+            return {row[0]: dict(zip(PRODUCT_CARD_COLUMNS, row)) for row in rows}
 
     def get_product_detail(self, vstitch_product_id):
         """Fetches the product row plus its variants/images in one connection
