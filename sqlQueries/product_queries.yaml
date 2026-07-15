@@ -1,0 +1,64 @@
+list_products_page: |
+  SELECT
+      p.VstitchProductId,
+      p.ProductName,
+      p.VstitchCategoryId,
+      c.CategoryName,
+      price_stats.min_price,
+      price_stats.max_price,
+      price_stats.in_stock,
+      color_list.colors,
+      img.image_url
+  FROM VStitch_Products p
+  JOIN VStitch_Categories c ON c.VstitchCategoryId = p.VstitchCategoryId
+  JOIN LATERAL (
+      SELECT MIN(pv.Price) AS min_price, MAX(pv.Price) AS max_price, BOOL_OR(pv.StockQuantity > 0) AS in_stock
+      FROM VStitch_ProductVariants pv
+      WHERE pv.VstitchProductId = p.VstitchProductId AND pv.IsActive = TRUE
+  ) price_stats ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT ARRAY_AGG(DISTINCT pv.Color ORDER BY pv.Color) AS colors
+      FROM VStitch_ProductVariants pv
+      WHERE pv.VstitchProductId = p.VstitchProductId AND pv.IsActive = TRUE
+  ) color_list ON TRUE
+  LEFT JOIN LATERAL (
+      SELECT pi.ImageUrl AS image_url
+      FROM VStitch_ProductImages pi
+      WHERE pi.VstitchProductId = p.VstitchProductId
+      ORDER BY pi.IsPrimary DESC, pi.DisplayOrder ASC
+      LIMIT 1
+  ) img ON TRUE
+  WHERE p.IsActive = TRUE
+    -- price_stats always yields one row per product (aggregates over zero
+    -- matching variants still return one row of NULLs), so a product with
+    -- every variant deactivated would otherwise pass through with a NULL
+    -- min/max price. Excluding it here is both correct catalog behavior
+    -- (nothing purchasable shouldn't be browsable) and required for
+    -- correctness downstream: ProductCardResponseDTO.min_price/max_price are
+    -- non-optional floats, so a NULL here would fail response validation for
+    -- the whole page, not just this one product.
+    AND price_stats.min_price IS NOT NULL
+    AND (%(category_id)s::BIGINT IS NULL OR p.VstitchCategoryId = %(category_id)s)
+    AND (%(search)s::TEXT IS NULL OR p.ProductName ILIKE %(search)s)
+    AND (%(after_id)s::BIGINT IS NULL OR p.VstitchProductId > %(after_id)s)
+    AND (%(in_stock_only)s = FALSE OR price_stats.in_stock = TRUE)
+  ORDER BY p.VstitchProductId ASC
+  LIMIT %(limit_plus_one)s;
+
+get_product_by_id: |
+  SELECT p.VstitchProductId, p.ProductName, p.Description, p.VstitchCategoryId, c.CategoryName, p.BasePrice
+  FROM VStitch_Products p
+  JOIN VStitch_Categories c ON c.VstitchCategoryId = p.VstitchCategoryId
+  WHERE p.VstitchProductId = %s AND p.IsActive = TRUE;
+
+get_variants_for_product: |
+  SELECT VstitchProductVariantId, Sku, Size, Color, Price, StockQuantity
+  FROM VStitch_ProductVariants
+  WHERE VstitchProductId = %s AND IsActive = TRUE
+  ORDER BY Size, Color;
+
+get_images_for_product: |
+  SELECT ImageUrl, IsPrimary, DisplayOrder
+  FROM VStitch_ProductImages
+  WHERE VstitchProductId = %s
+  ORDER BY IsPrimary DESC, DisplayOrder ASC;

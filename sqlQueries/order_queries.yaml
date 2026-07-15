@@ -1,5 +1,5 @@
 get_variants_for_order: |
-  SELECT pv.VstitchProductVariantId, p.ProductName, pv.Size, pv.Color, pv.Price, pv.StockQuantity, pv.IsActive
+  SELECT pv.VstitchProductVariantId, pv.VstitchProductId, p.ProductName, pv.Size, pv.Color, pv.Price, pv.StockQuantity, pv.IsActive
   FROM VStitch_ProductVariants pv
   JOIN VStitch_Products p ON p.VstitchProductId = pv.VstitchProductId
   WHERE pv.VstitchProductVariantId = ANY(%s);
@@ -26,4 +26,4 @@ decrement_variant_stock_bulk: |
   FROM (SELECT * FROM UNNEST(%s::BIGINT[], %s::INT[]) AS t(variant_id, qty)) AS req
   WHERE pv.VstitchProductVariantId = req.variant_id
     AND pv.StockQuantity >= req.qty
-  RETURNING pv.VstitchProductVariantId;
+  RETURNING pv.VstitchProductVariantId, pv.StockQuantity;

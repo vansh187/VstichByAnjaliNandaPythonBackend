@@ -15,8 +15,7 @@ class OrderPersistence:
 
     def get_variants_for_order(self, vstitch_product_variant_ids):
         """Fetches every requested variant in a single round trip, keyed by id."""
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     self.query_loader.get_query("get_variants_for_order"),
@@ -25,6 +24,7 @@ class OrderPersistence:
                 variant_rows = cursor.fetchall()
             column_names = (
                 "vstitch_product_variant_id",
+                "vstitch_product_id",
                 "product_name",
                 "size",
                 "color",
@@ -33,8 +33,6 @@ class OrderPersistence:
                 "is_active",
             )
             return {row[0]: dict(zip(column_names, row)) for row in variant_rows}
-        finally:
-            self.connection_factory.release_connection(connection)
 
     def create_cod_order(
         self,
@@ -51,8 +49,7 @@ class OrderPersistence:
         created_by_ip_address,
         order_items,
     ):
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     self.query_loader.get_query("insert_order"),
@@ -82,9 +79,9 @@ class OrderPersistence:
                     self.query_loader.get_query("decrement_variant_stock_bulk"),
                     (variant_ids, quantities),
                 )
-                decremented_variant_ids = {row[0] for row in cursor.fetchall()}
+                remaining_stock_by_variant_id = {row[0]: row[1] for row in cursor.fetchall()}
                 for order_item in order_items:
-                    if order_item["vstitch_product_variant_id"] not in decremented_variant_ids:
+                    if order_item["vstitch_product_variant_id"] not in remaining_stock_by_variant_id:
                         raise ValueError(
                             f"Insufficient stock for {order_item['product_name_snapshot']}."
                         )
@@ -109,9 +106,10 @@ class OrderPersistence:
                 )
 
             connection.commit()
-            return vstitch_order_id, order_status, payment_method, inserted_total_amount
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            self.connection_factory.release_connection(connection)
+            return (
+                vstitch_order_id,
+                order_status,
+                payment_method,
+                inserted_total_amount,
+                remaining_stock_by_variant_id,
+            )

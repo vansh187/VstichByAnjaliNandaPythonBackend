@@ -1,0 +1,5 @@
+list_active_categories: |
+  SELECT VstitchCategoryId, CategoryName, ParentCategoryId
+  FROM VStitch_Categories
+  WHERE IsActive = TRUE
+  ORDER BY ParentCategoryId NULLS FIRST, CategoryName;

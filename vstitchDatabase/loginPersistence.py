@@ -10,8 +10,7 @@ class LoginPersistence:
         self.query_loader = QueryLoader("user_queries.yaml")
 
     def get_user_by_username(self, vstitch_user_name):
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(self.query_loader.get_query("get_user_by_username"), (vstitch_user_name,))
                 user_row = cursor.fetchone()
@@ -27,5 +26,3 @@ class LoginPersistence:
                 "phone_number",
             )
             return dict(zip(column_names, user_row))
-        finally:
-            self.connection_factory.release_connection(connection)

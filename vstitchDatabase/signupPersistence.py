@@ -10,31 +10,22 @@ class SignupPersistence:
         self.query_loader = QueryLoader("user_queries.yaml")
 
     def is_username_taken(self, vstitch_user_name):
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(self.query_loader.get_query("check_username_exists"), (vstitch_user_name,))
                 return cursor.fetchone() is not None
-        finally:
-            self.connection_factory.release_connection(connection)
 
     def is_email_taken(self, email):
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(self.query_loader.get_query("check_email_exists"), (email,))
                 return cursor.fetchone() is not None
-        finally:
-            self.connection_factory.release_connection(connection)
 
     def is_phone_number_taken(self, phone_number):
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(self.query_loader.get_query("check_phone_exists"), (phone_number,))
                 return cursor.fetchone() is not None
-        finally:
-            self.connection_factory.release_connection(connection)
 
     def create_user(
         self,
@@ -46,8 +37,7 @@ class SignupPersistence:
         phone_number,
         created_by_ip_address,
     ):
-        connection = self.connection_factory.get_connection()
-        try:
+        with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     self.query_loader.get_query("insert_user"),
@@ -64,8 +54,3 @@ class SignupPersistence:
                 inserted_row = cursor.fetchone()
             connection.commit()
             return inserted_row
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            self.connection_factory.release_connection(connection)

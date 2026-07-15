@@ -1,5 +1,6 @@
 from vstitchDatabase.orderPersistence import OrderPersistence
 from vstitchDTO.orderResponseDTO import CreateOrderResponseDTO, OrderItemResponseDTO
+from vstitchServices.localCacheService import local_cache_service
 
 
 class OrderService:
@@ -43,6 +44,7 @@ class OrderService:
             order_items.append(
                 {
                     "vstitch_product_variant_id": variant_id,
+                    "vstitch_product_id": variant["vstitch_product_id"],
                     "product_name_snapshot": variant["product_name"],
                     "size_snapshot": variant["size"],
                     "color_snapshot": variant["color"],
@@ -52,7 +54,7 @@ class OrderService:
                 }
             )
 
-        vstitch_order_id, order_status, payment_method, inserted_total_amount = (
+        vstitch_order_id, order_status, payment_method, inserted_total_amount, remaining_stock_by_variant_id = (
             self.order_persistence.create_cod_order(
                 vstitch_user_id,
                 total_amount,
@@ -68,6 +70,8 @@ class OrderService:
                 order_items,
             )
         )
+
+        self._evict_sold_out_products_from_cache(order_items, remaining_stock_by_variant_id)
 
         return CreateOrderResponseDTO(
             vstitch_order_id=vstitch_order_id,
@@ -88,3 +92,28 @@ class OrderService:
             ],
             message="Order placed successfully. Pay cash on delivery.",
         )
+
+    def _evict_sold_out_products_from_cache(self, order_items, remaining_stock_by_variant_id):
+        """If this order took a variant's stock to 0, don't leave the catalog
+        cache showing it as in stock for the rest of its TTL - evict it now so
+        the next browse/detail request sees the sellout immediately instead of
+        potentially inviting another order that's already destined for a 409.
+        Called after the order transaction has committed, so it only runs once
+        the sellout is real, never speculatively.
+        """
+        sold_out_product_ids = {
+            order_item["vstitch_product_id"]
+            for order_item in order_items
+            if remaining_stock_by_variant_id.get(order_item["vstitch_product_variant_id"]) == 0
+        }
+        if not sold_out_product_ids:
+            return
+
+        for product_id in sold_out_product_ids:
+            local_cache_service.delete(f"products:detail:{product_id}")
+        # A sold-out product can appear in any number of cached listing pages
+        # (different category/search/pagination combinations) - there's no
+        # cheap way to know which ones without an inverted index, so clear all
+        # of them. Cheap to rebuild (catalog is small) and correctness here
+        # matters more than preserving unrelated list cache entries.
+        local_cache_service.clear_prefix("products:list:")
