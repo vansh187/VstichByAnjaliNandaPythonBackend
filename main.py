@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from vstitchapi.loginapi import login_router
+from vstitchapi.orderapi import order_router
 from vstitchapi.signupapi import signup_router
 from vstitchDatabase.schemaPersistence import SchemaPersistence
 
@@ -27,6 +28,7 @@ app.add_middleware(
 
 app.include_router(signup_router)
 app.include_router(login_router)
+app.include_router(order_router)
 
 
 @app.get("/")

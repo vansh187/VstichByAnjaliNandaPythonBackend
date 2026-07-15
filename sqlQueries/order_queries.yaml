@@ -1,0 +1,29 @@
+get_variants_for_order: |
+  SELECT pv.VstitchProductVariantId, p.ProductName, pv.Size, pv.Color, pv.Price, pv.StockQuantity, pv.IsActive
+  FROM VStitch_ProductVariants pv
+  JOIN VStitch_Products p ON p.VstitchProductId = pv.VstitchProductId
+  WHERE pv.VstitchProductVariantId = ANY(%s);
+
+insert_order: |
+  INSERT INTO VStitch_Orders
+      (VstitchUserId, OrderStatus, PaymentMethod, TotalAmount, ShippingRecipientName, ShippingAddressLine1,
+       ShippingAddressLine2, ShippingCity, ShippingState, ShippingPostalCode, ShippingCountry, ShippingPhoneNumber,
+       created_by, created_date)
+  VALUES
+      (%s, 'placed', 'cod', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+  RETURNING VstitchOrderId, OrderStatus, PaymentMethod, TotalAmount, created_date;
+
+insert_order_items_bulk: |
+  INSERT INTO VStitch_OrderItems
+      (VstitchOrderId, VstitchProductVariantId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,
+       UnitPriceSnapshot, Quantity, created_by)
+  VALUES %s;
+
+decrement_variant_stock_bulk: |
+  UPDATE VStitch_ProductVariants pv
+  SET StockQuantity = pv.StockQuantity - req.qty,
+      updated_date = CURRENT_TIMESTAMP
+  FROM (SELECT * FROM UNNEST(%s::BIGINT[], %s::INT[]) AS t(variant_id, qty)) AS req
+  WHERE pv.VstitchProductVariantId = req.variant_id
+    AND pv.StockQuantity >= req.qty
+  RETURNING pv.VstitchProductVariantId;

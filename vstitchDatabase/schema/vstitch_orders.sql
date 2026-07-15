@@ -6,8 +6,13 @@
 CREATE TABLE IF NOT EXISTS VStitch_Orders (
     VstitchOrderId         BIGSERIAL     PRIMARY KEY,
     VstitchUserId          BIGINT        NOT NULL REFERENCES VStitch_Users(VstitchUserId) ON DELETE RESTRICT,
-    OrderStatus            VARCHAR(20)   NOT NULL DEFAULT 'pending'
-                               CHECK (OrderStatus IN ('pending', 'paid', 'shipped', 'delivered', 'cancelled', 'refunded')),
+    -- COD-specific pipeline - no 'paid' state, since cash is only collected at
+    -- the DELIVERED step rather than upfront. See vstitchServices/orderStatus.py
+    -- for the full transition map (placed -> confirmed -> processing -> shipped
+    -- -> out_for_delivery -> delivered, with cancelled/delivery_failed exits).
+    OrderStatus            VARCHAR(20)   NOT NULL DEFAULT 'placed'
+                               CHECK (OrderStatus IN ('placed', 'confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'delivery_failed')),
+    PaymentMethod           VARCHAR(20)   NOT NULL DEFAULT 'cod' CHECK (PaymentMethod IN ('cod')),
     TotalAmount            NUMERIC(10,2) NOT NULL CHECK (TotalAmount >= 0),
     ShippingRecipientName  VARCHAR(250)  NOT NULL,
     ShippingAddressLine1   VARCHAR(250)  NOT NULL,
