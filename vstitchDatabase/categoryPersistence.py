@@ -14,5 +14,5 @@ class CategoryPersistence:
             with connection.cursor() as cursor:
                 cursor.execute(self.query_loader.get_query("list_active_categories"))
                 rows = cursor.fetchall()
-            column_names = ("vstitch_category_id", "category_name", "parent_category_id")
+            column_names = ("vstitch_category_id", "category_name", "parent_category_id", "image_url")
             return [dict(zip(column_names, row)) for row in rows]

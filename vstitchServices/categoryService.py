@@ -23,6 +23,7 @@ class CategoryService:
                 vstitch_category_id=row["vstitch_category_id"],
                 category_name=row["category_name"],
                 parent_category_id=row["parent_category_id"],
+                image_url=row["image_url"],
             )
             for row in rows
         ]

@@ -22,6 +22,15 @@ SEEDED_BY = "seed-script"
 
 CATEGORIES = ["Sarees", "Kurtis", "Lehengas", "Salwar Suits", "Dupattas"]
 
+# category_name -> image seed (banner/thumbnail shown on category nav/listing pages)
+CATEGORY_IMAGE_SEEDS = {
+    "Sarees": "category-sarees",
+    "Kurtis": "category-kurtis",
+    "Lehengas": "category-lehengas",
+    "Salwar Suits": "category-salwar-suits",
+    "Dupattas": "category-dupattas",
+}
+
 # category_name -> (product_name, description, base_price)
 PRODUCTS = {
     "Sarees": (
@@ -98,22 +107,28 @@ VARIANTS = {
 }
 
 
-def get_or_create_category(cursor, category_name):
+def get_or_create_category(cursor, category_name, image_url):
     cursor.execute(
         "SELECT VstitchCategoryId FROM VStitch_Categories WHERE CategoryName = %s AND ParentCategoryId IS NULL;",
         (category_name,),
     )
     existing_row = cursor.fetchone()
     if existing_row is not None:
-        return existing_row[0]
+        category_id = existing_row[0]
+        # Backfill only - never overwrite an image someone already set.
+        cursor.execute(
+            "UPDATE VStitch_Categories SET ImageUrl = %s WHERE VstitchCategoryId = %s AND ImageUrl IS NULL;",
+            (image_url, category_id),
+        )
+        return category_id
 
     cursor.execute(
         """
-        INSERT INTO VStitch_Categories (CategoryName, created_by, created_date)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        INSERT INTO VStitch_Categories (CategoryName, ImageUrl, created_by, created_date)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
         RETURNING VstitchCategoryId;
         """,
-        (category_name, SEEDED_BY),
+        (category_name, image_url, SEEDED_BY),
     )
     return cursor.fetchone()[0]
 
@@ -175,7 +190,8 @@ def seed():
     image_count = 0
     try:
         for category_name in CATEGORIES:
-            category_id = get_or_create_category(cursor, category_name)
+            category_image_url = f"https://picsum.photos/seed/{CATEGORY_IMAGE_SEEDS[category_name]}/800/400"
+            category_id = get_or_create_category(cursor, category_name, category_image_url)
             product_name, description, base_price = PRODUCTS[category_name]
             product_id = get_or_create_product(cursor, product_name, description, category_id, base_price)
 
