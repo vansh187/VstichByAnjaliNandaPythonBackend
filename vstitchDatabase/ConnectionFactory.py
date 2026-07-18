@@ -33,9 +33,17 @@ class ConnectionFactory:
         # cold pool (minconn=1) serializes ~0.9s of connection setup into the
         # request path of whichever concurrent requests are unlucky enough to
         # need a new connection - the request-time cost this cache exists to
-        # avoid. Pre-warming all 10 here pays that cost once at startup.
+        # avoid. Pre-warming here pays that cost once at startup.
+        #
+        # Sized to 2/5 rather than 10/10: Supabase's session-mode pooler caps
+        # this database at 15 total client connections, and Render's
+        # zero-downtime deploys run the old and new instances side by side
+        # for a few seconds. Two 5-connection pools overlapping (10) stay
+        # under that cap; two 10-connection pools (20) don't, and the new
+        # instance's pool construction - and therefore the whole app import -
+        # fails outright on every deploy.
         self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
-            10, 10, dsn=self.database_url
+            2, 5, dsn=self.database_url
         )
 
     def get_connection(self):
