@@ -13,6 +13,26 @@ insert_order: |
       (%s, 'placed', 'cod', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
   RETURNING VstitchOrderId, OrderStatus, PaymentMethod, TotalAmount, created_date;
 
+insert_order_with_status: |
+  -- Same shape as insert_order but with OrderStatus/PaymentMethod as bind
+  -- params instead of hardcoded 'placed'/'cod' literals - kept as a separate
+  -- query rather than replacing insert_order so the COD path (already live)
+  -- is never touched by the gateway-payment addition.
+  INSERT INTO VStitch_Orders
+      (VstitchUserId, OrderStatus, PaymentMethod, TotalAmount, ShippingRecipientName, ShippingAddressLine1,
+       ShippingAddressLine2, ShippingCity, ShippingState, ShippingPostalCode, ShippingCountry, ShippingPhoneNumber,
+       created_by, created_date)
+  VALUES
+      (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+  RETURNING VstitchOrderId, OrderStatus, PaymentMethod, TotalAmount, created_date;
+
+insert_payment_transaction: |
+  INSERT INTO VStitch_PaymentTransactions
+      (VstitchOrderId, GatewayName, RazorpayOrderId, PaymentStatus, Amount, Currency, created_by)
+  VALUES
+      (%s, 'razorpay', %s, 'created', %s, %s, %s)
+  RETURNING VstitchPaymentTransactionId;
+
 insert_order_items_bulk: |
   INSERT INTO VStitch_OrderItems
       (VstitchOrderId, VstitchProductVariantId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,

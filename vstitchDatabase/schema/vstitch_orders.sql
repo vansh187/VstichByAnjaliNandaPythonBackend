@@ -10,9 +10,12 @@ CREATE TABLE IF NOT EXISTS VStitch_Orders (
     -- the DELIVERED step rather than upfront. See vstitchServices/orderStatus.py
     -- for the full transition map (placed -> confirmed -> processing -> shipped
     -- -> out_for_delivery -> delivered, with cancelled/delivery_failed exits).
+    -- payment_pending/payment_failed are Razorpay-only: an online order starts
+    -- at payment_pending and only reaches placed (rejoining the same pipeline)
+    -- once the payment.captured webhook confirms the charge succeeded.
     OrderStatus            VARCHAR(20)   NOT NULL DEFAULT 'placed'
-                               CHECK (OrderStatus IN ('placed', 'confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'delivery_failed')),
-    PaymentMethod           VARCHAR(20)   NOT NULL DEFAULT 'cod' CHECK (PaymentMethod IN ('cod')),
+                               CHECK (OrderStatus IN ('payment_pending', 'payment_failed', 'placed', 'confirmed', 'processing', 'shipped', 'out_for_delivery', 'delivered', 'cancelled', 'delivery_failed')),
+    PaymentMethod           VARCHAR(20)   NOT NULL DEFAULT 'cod' CHECK (PaymentMethod IN ('cod', 'razorpay')),
     TotalAmount            NUMERIC(10,2) NOT NULL CHECK (TotalAmount >= 0),
     ShippingRecipientName  VARCHAR(250)  NOT NULL,
     ShippingAddressLine1   VARCHAR(250)  NOT NULL,

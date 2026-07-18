@@ -14,13 +14,20 @@ class OrderService:
     def __init__(self):
         self.order_persistence = OrderPersistence()
 
-    def place_cod_order(self, create_order_request_dto, vstitch_user_id, created_by_ip_address):
+    def validate_and_price_items(self, requested_items):
+        """Turns raw requested (variant_id, quantity) lines into priced,
+        stock-checked order-item dicts, ready to hand to any order-creation
+        persistence call. Shared by every checkout path (COD today, gateway
+        payments as well) so variant validation and pricing only live in one
+        place. Raises ValueError on anything unpurchasable - callers surface
+        that as a 409, never a 500.
+        """
         # Merge repeated variants into one line up front: it collapses the request
         # to one row per variant (matching the persistence layer's batched, one
         # row per variant stock decrement) and keeps a single order-item row per
         # variant instead of splitting one product across duplicate lines.
         requested_quantity_by_variant_id = {}
-        for requested_item in create_order_request_dto.items:
+        for requested_item in requested_items:
             variant_id = requested_item.vstitch_product_variant_id
             requested_quantity_by_variant_id[variant_id] = (
                 requested_quantity_by_variant_id.get(variant_id, 0) + requested_item.quantity
@@ -59,6 +66,11 @@ class OrderService:
                 }
             )
 
+        return order_items, total_amount
+
+    def place_cod_order(self, create_order_request_dto, vstitch_user_id, created_by_ip_address):
+        order_items, total_amount = self.validate_and_price_items(create_order_request_dto.items)
+
         vstitch_order_id, order_status, payment_method, inserted_total_amount, remaining_stock_by_variant_id = (
             self.order_persistence.create_cod_order(
                 vstitch_user_id,
@@ -76,7 +88,7 @@ class OrderService:
             )
         )
 
-        self._evict_sold_out_products_from_cache(order_items, remaining_stock_by_variant_id)
+        self.evict_sold_out_products_from_cache(order_items, remaining_stock_by_variant_id)
 
         return CreateOrderResponseDTO(
             vstitch_order_id=vstitch_order_id,
@@ -97,6 +109,44 @@ class OrderService:
             ],
             message="Order placed successfully. Pay cash on delivery.",
         )
+
+    def create_pending_gateway_order(
+        self, order_items, total_amount, create_order_request_dto, vstitch_user_id, created_by_ip_address, razorpay_order_id
+    ):
+        """Creates the VStitch_Orders row (+ stock decrement + order items + the
+        initial payment-transaction row) for a Razorpay checkout, in the same
+        atomic unit of work as create_cod_order - just starting at
+        PAYMENT_PENDING/'razorpay' instead of PLACED/'cod', and with a
+        VStitch_PaymentTransactions row for the already-created gateway order
+        included in the same transaction. Only ever called after the Razorpay
+        order itself was created successfully (see PaymentService), so a DB
+        failure here never leaves a charged customer without a matching order.
+        """
+        (
+            vstitch_order_id,
+            order_status,
+            payment_method,
+            inserted_total_amount,
+            remaining_stock_by_variant_id,
+        ) = self.order_persistence.create_razorpay_pending_order(
+            vstitch_user_id,
+            total_amount,
+            create_order_request_dto.shipping_recipient_name,
+            create_order_request_dto.shipping_address_line1,
+            create_order_request_dto.shipping_address_line2,
+            create_order_request_dto.shipping_city,
+            create_order_request_dto.shipping_state,
+            create_order_request_dto.shipping_postal_code,
+            create_order_request_dto.shipping_country,
+            create_order_request_dto.shipping_phone_number,
+            created_by_ip_address,
+            order_items,
+            razorpay_order_id,
+        )
+
+        self.evict_sold_out_products_from_cache(order_items, remaining_stock_by_variant_id)
+
+        return vstitch_order_id, order_status, payment_method, inserted_total_amount
 
     def list_orders_for_user(self, vstitch_user_id, before_id, limit):
         """Returns one page of the calling user's order history, newest first,
@@ -152,7 +202,7 @@ class OrderService:
 
         return OrderListResponseDTO(orders=orders, has_more=has_more, next_cursor=next_cursor)
 
-    def _evict_sold_out_products_from_cache(self, order_items, remaining_stock_by_variant_id):
+    def evict_sold_out_products_from_cache(self, order_items, remaining_stock_by_variant_id):
         """If this order took a variant's stock to 0, don't leave the catalog
         cache showing it as in stock for the rest of its TTL - evict it now so
         the next browse/detail request sees the sellout immediately instead of
