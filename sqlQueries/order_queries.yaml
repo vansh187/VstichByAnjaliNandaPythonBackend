@@ -93,6 +93,25 @@ save_awb_details: |
       updated_date = CURRENT_TIMESTAMP
   WHERE VstitchOrderId = %(vstitch_order_id)s;
 
+save_awb_details_if_unset: |
+  -- Guarded variant of save_awb_details, used only for the initial
+  -- Shiprocket-assign-AWB write (both the automatic and manual paths) -
+  -- the AND AwbCode IS NULL closes the TOCTOU window between an earlier
+  -- "does this order already have an AWB" read and this write, so two
+  -- concurrent assignment attempts can't silently overwrite each other;
+  -- only the first to commit actually persists. The tracking-webhook path
+  -- (save_awb_details) intentionally stays unconditional - it's meant to
+  -- refresh AWB/courier info from live Shiprocket events regardless of
+  -- what's already stored.
+  UPDATE VStitch_Orders
+  SET AwbCode = %(awb_code)s,
+      CourierName = %(courier_name)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchOrderId = %(vstitch_order_id)s
+    AND AwbCode IS NULL
+  RETURNING VstitchOrderId;
+
 get_order_for_tracking: |
   SELECT VstitchOrderId, VstitchUserId, OrderStatus, ShiprocketOrderId, ShiprocketShipmentId, AwbCode
   FROM VStitch_Orders

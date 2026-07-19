@@ -174,6 +174,29 @@ class OrderPersistence:
                 )
             connection.commit()
 
+    def save_awb_details_if_unset(self, vstitch_order_id, awb_code, courier_name, updated_by):
+        """Guarded write for the initial AWB assignment - returns True only
+        if the order's AwbCode was actually still NULL and this call is the
+        one that set it. Returns False if it lost a race against another
+        concurrent assignment (the row already had an AwbCode by the time
+        this UPDATE ran), so the caller can tell "I assigned it" apart from
+        "someone else already did."
+        """
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("save_awb_details_if_unset"),
+                    {
+                        "vstitch_order_id": vstitch_order_id,
+                        "awb_code": awb_code,
+                        "courier_name": courier_name,
+                        "updated_by": updated_by,
+                    },
+                )
+                order_row = cursor.fetchone()
+            connection.commit()
+            return order_row is not None
+
     def get_order_for_tracking(self, vstitch_order_id):
         """Fetches just the identifiers a tracking/cancel/AWB call needs -
         including VstitchUserId, so the caller can verify the requesting user

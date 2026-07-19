@@ -66,6 +66,14 @@ def _coerce_bigint(value):
         return int(value.strip())
     return None
 
+
+# Caps how much of a Shiprocket error body can end up in a raised ValueError -
+# that message flows into both application logs and, via the ops API's
+# `except ValueError -> HTTPException(409, detail=str(...))`, an HTTP
+# response body, so an unbounded raw response dict (Shiprocket's fallback
+# when there's no top-level "message") must never be embedded whole.
+MAX_SHIPROCKET_ERROR_MESSAGE_LENGTH = 300
+
 # VStitch_Orders.PaymentMethod values -> Shiprocket's own payment_method
 # strings ("COD" collects cash on delivery from the customer; "Prepaid" is
 # used for the already-paid-at-the-gateway Razorpay path).
@@ -358,9 +366,26 @@ class ShipmentService:
         awb_code = _dig(response, "response", "data", "awb_code")
         courier_name = _dig(response, "response", "data", "courier_name")
         if not awb_code:
-            error_message = _dig(response, "message") or response
+            error_message = _dig(response, "message") or str(response)
+            if len(error_message) > MAX_SHIPROCKET_ERROR_MESSAGE_LENGTH:
+                error_message = error_message[:MAX_SHIPROCKET_ERROR_MESSAGE_LENGTH] + "...(truncated)"
             raise ValueError(f"Shiprocket did not assign an AWB for shipment {shiprocket_shipment_id}: {error_message}")
-        self.order_persistence.save_awb_details(vstitch_order_id, awb_code, courier_name, "shiprocket-ops")
+
+        # Guarded write, not the plain save_awb_details the tracking webhook
+        # uses: the assign_awb_for_order pre-check above (or "no AWB yet" in
+        # create_shipment_for_order) only rules out an *already-known*
+        # AwbCode - it can't see a concurrent assignment that's still
+        # in-flight. This UPDATE is the actual point of atomicity: only the
+        # first caller to commit it persists, closing that window.
+        was_assigned = self.order_persistence.save_awb_details_if_unset(
+            vstitch_order_id, awb_code, courier_name, "shiprocket-ops"
+        )
+        if not was_assigned:
+            raise ValueError(
+                f"Order {vstitch_order_id} already had an AWB assigned by the time Shiprocket responded to this "
+                f"request (courier {courier_name}, AWB {awb_code}) - lost the race to a concurrent assignment, "
+                f"so this one was not persisted."
+            )
         return response
 
     def _resolve_shipment_ids(self, vstitch_order_ids):
