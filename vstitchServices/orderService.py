@@ -1,3 +1,5 @@
+import logging
+
 from vstitchDatabase.orderPersistence import OrderPersistence
 from vstitchDTO.orderResponseDTO import (
     CreateOrderResponseDTO,
@@ -6,6 +8,9 @@ from vstitchDTO.orderResponseDTO import (
     OrderListResponseDTO,
 )
 from vstitchServices.localCacheService import local_cache_service
+from vstitchServices.shipmentService import ShipmentService
+
+logger = logging.getLogger(__name__)
 
 
 class OrderService:
@@ -89,6 +94,7 @@ class OrderService:
         )
 
         self.evict_sold_out_products_from_cache(order_items, remaining_stock_by_variant_id)
+        self._create_shipment(vstitch_order_id)
 
         return CreateOrderResponseDTO(
             vstitch_order_id=vstitch_order_id,
@@ -109,6 +115,25 @@ class OrderService:
             ],
             message="Order placed successfully. Pay cash on delivery.",
         )
+
+    def _create_shipment(self, vstitch_order_id):
+        """Creates the Shiprocket shipment for a just-placed COD order. Never
+        raises: shipment creation is a downstream concern of order placement,
+        not a precondition for it - an already-committed order and its stock
+        decrement must never be undone (or the response turned into an error)
+        just because Shiprocket rejected the request or is unreachable. Mirrors
+        PaymentService._create_shipment, which does the same for the Razorpay
+        capture path; a failure here is logged the same way, and the order
+        will need its shipment created manually.
+        """
+        try:
+            ShipmentService().create_shipment_for_order(vstitch_order_id)
+        except Exception:
+            logger.exception(
+                "Shiprocket shipment creation failed for VStitch order %s - order/stock state is "
+                "unaffected, but this order will need its shipment created manually.",
+                vstitch_order_id,
+            )
 
     def create_pending_gateway_order(
         self, order_items, total_amount, create_order_request_dto, vstitch_user_id, created_by_ip_address, razorpay_order_id

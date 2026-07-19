@@ -50,11 +50,13 @@ def _dig(data, *keys):
         data = data.get(key)
     return data
 
-# Razorpay orders are always prepaid at the gateway before this service is
-# ever invoked (see PaymentService.handle_webhook_event) - COD orders never
-# reach Shiprocket order creation through this path, so there's no COD
-# branch to map here.
-SHIPROCKET_PAYMENT_METHOD = "Prepaid"
+# VStitch_Orders.PaymentMethod values -> Shiprocket's own payment_method
+# strings ("COD" collects cash on delivery from the customer; "Prepaid" is
+# used for the already-paid-at-the-gateway Razorpay path).
+SHIPROCKET_PAYMENT_METHOD_BY_ORDER_PAYMENT_METHOD = {
+    "cod": "COD",
+    "razorpay": "Prepaid",
+}
 
 # A customer can only ask to cancel while we haven't yet handed the parcel to
 # a courier for real - matches OrderStatus.ALLOWED_TRANSITIONS' own CANCELLED
@@ -83,7 +85,8 @@ class ShipmentService:
         self.order_persistence = OrderPersistence()
         self.shiprocket_client = ShiprocketClient()
 
-    # --- Order creation (triggered by payment capture) -------------------
+    # --- Order creation (triggered right after order placement: immediately
+    # for COD, on Razorpay payment capture for gateway orders) -------------
 
     def create_shipment_for_order(self, vstitch_order_id):
         """Fetches the order, validates every item has the data Shiprocket
@@ -159,7 +162,7 @@ class ShipmentService:
             "billing_phone": order["shipping_phone_number"],
             "shipping_is_billing": True,
             "order_items": order_items_payload,
-            "payment_method": SHIPROCKET_PAYMENT_METHOD,
+            "payment_method": SHIPROCKET_PAYMENT_METHOD_BY_ORDER_PAYMENT_METHOD[order["payment_method"]],
             "sub_total": float(order["total_amount"]),
             # A single box is assumed for the whole order (max footprint across
             # items, summed weight) since Shiprocket's adhoc-order API takes one
