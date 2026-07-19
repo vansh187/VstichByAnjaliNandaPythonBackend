@@ -205,6 +205,7 @@ class OrderService:
                 shipping_country=order_row["shipping_country"],
                 shipping_phone_number=order_row["shipping_phone_number"],
                 created_date=order_row["created_date"],
+                awb_code=order_row["awb_code"],
                 items=[
                     OrderItemResponseDTO(
                         vstitch_product_variant_id=item["vstitch_product_variant_id"],

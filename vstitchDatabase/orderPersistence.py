@@ -63,6 +63,7 @@ class OrderPersistence:
                 "shipping_country",
                 "shipping_phone_number",
                 "created_date",
+                "awb_code",
             )
             return [dict(zip(column_names, row)) for row in order_rows]
 

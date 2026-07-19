@@ -37,6 +37,7 @@ class OrderDetailResponseDTO(BaseModel):
     shipping_country: str
     shipping_phone_number: str
     created_date: datetime
+    awb_code: Optional[str]
     items: List[OrderItemResponseDTO]
 
 

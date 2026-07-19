@@ -42,7 +42,7 @@ insert_order_items_bulk: |
 get_orders_for_user: |
   SELECT VstitchOrderId, OrderStatus, PaymentMethod, TotalAmount, ShippingRecipientName, ShippingAddressLine1,
          ShippingAddressLine2, ShippingCity, ShippingState, ShippingPostalCode, ShippingCountry, ShippingPhoneNumber,
-         created_date
+         created_date, AwbCode
   FROM VStitch_Orders
   WHERE VstitchUserId = %(vstitch_user_id)s
     AND (%(before_id)s::BIGINT IS NULL OR VstitchOrderId < %(before_id)s)
