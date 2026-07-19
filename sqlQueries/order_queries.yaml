@@ -56,6 +56,82 @@ get_order_items_for_orders: |
   WHERE VstitchOrderId = ANY(%s)
   ORDER BY VstitchOrderId, VstitchOrderItemId;
 
+get_order_header_for_shipment: |
+  SELECT o.VstitchOrderId, o.PaymentMethod, o.TotalAmount, o.ShippingRecipientName, o.ShippingAddressLine1,
+         o.ShippingAddressLine2, o.ShippingCity, o.ShippingState, o.ShippingPostalCode, o.ShippingCountry,
+         o.ShippingPhoneNumber, o.created_date, u.Email
+  FROM VStitch_Orders o
+  JOIN VStitch_Users u ON u.VstitchUserId = o.VstitchUserId
+  WHERE o.VstitchOrderId = %s;
+
+get_order_items_for_shipment: |
+  -- Dimensions/SKU come from the live variant row, not an order-item snapshot -
+  -- shipment creation runs immediately after payment capture, so the variant
+  -- is expected to still exist; ShipmentService treats a missing join (variant
+  -- deleted) or a missing dimension as a clear ValueError rather than shipping
+  -- a guessed value.
+  SELECT oi.VstitchOrderItemId, oi.ProductNameSnapshot, oi.UnitPriceSnapshot, oi.Quantity,
+         pv.Sku, pv.WeightKg, pv.LengthCm, pv.BreadthCm, pv.HeightCm
+  FROM VStitch_OrderItems oi
+  LEFT JOIN VStitch_ProductVariants pv ON pv.VstitchProductVariantId = oi.VstitchProductVariantId
+  WHERE oi.VstitchOrderId = %s
+  ORDER BY oi.VstitchOrderItemId;
+
+save_shiprocket_shipment_ids: |
+  UPDATE VStitch_Orders
+  SET ShiprocketOrderId = %(shiprocket_order_id)s,
+      ShiprocketShipmentId = %(shiprocket_shipment_id)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchOrderId = %(vstitch_order_id)s;
+
+save_awb_details: |
+  UPDATE VStitch_Orders
+  SET AwbCode = %(awb_code)s,
+      CourierName = %(courier_name)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchOrderId = %(vstitch_order_id)s;
+
+get_order_for_tracking: |
+  SELECT VstitchOrderId, VstitchUserId, OrderStatus, ShiprocketOrderId, ShiprocketShipmentId, AwbCode
+  FROM VStitch_Orders
+  WHERE VstitchOrderId = %s;
+
+find_order_by_shiprocket_order_id: |
+  SELECT VstitchOrderId, OrderStatus
+  FROM VStitch_Orders
+  WHERE ShiprocketOrderId = %s;
+
+# Reused for order cancellation: same shape as payment_queries.yaml's
+# update_order_status/restock_variants_for_order (guarded by old_status so a
+# double-submitted cancel request can never double-restock), kept as its own
+# copy here so OrderPersistence doesn't need to reach into another
+# persistence class's query file for a generic status transition.
+update_order_status_guarded: |
+  UPDATE VStitch_Orders
+  SET OrderStatus = %(new_status)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchOrderId = %(vstitch_order_id)s
+    AND OrderStatus = ANY(%(old_statuses)s)
+  RETURNING VstitchOrderId;
+
+restock_variants_for_order: |
+  UPDATE VStitch_ProductVariants pv
+  SET StockQuantity = pv.StockQuantity + oi.Quantity,
+      updated_date = CURRENT_TIMESTAMP
+  FROM VStitch_OrderItems oi
+  WHERE oi.VstitchOrderId = %s
+    AND pv.VstitchProductVariantId = oi.VstitchProductVariantId;
+
+insert_return_order: |
+  INSERT INTO VStitch_ReturnOrders
+      (VstitchOrderId, ShiprocketReturnOrderId, ShiprocketShipmentId, Reason, Status, created_by)
+  VALUES
+      (%s, %s, %s, %s, 'requested', %s)
+  RETURNING VstitchReturnOrderId;
+
 decrement_variant_stock_bulk: |
   UPDATE VStitch_ProductVariants pv
   SET StockQuantity = pv.StockQuantity - req.qty,

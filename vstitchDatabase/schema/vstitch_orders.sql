@@ -25,6 +25,12 @@ CREATE TABLE IF NOT EXISTS VStitch_Orders (
     ShippingPostalCode     VARCHAR(20)   NOT NULL,
     ShippingCountry        VARCHAR(250)  NOT NULL,
     ShippingPhoneNumber    VARCHAR(250)  NOT NULL,
+    -- Shiprocket-side identifiers, populated once the shipment is created -
+    -- see migrations/0005_add_shiprocket_order_tracking.sql.
+    ShiprocketOrderId      BIGINT,
+    ShiprocketShipmentId   BIGINT,
+    AwbCode                VARCHAR(100),
+    CourierName            VARCHAR(250),
     created_by             VARCHAR(250)  NOT NULL,
     created_date           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by             VARCHAR(250),
@@ -34,3 +40,4 @@ CREATE TABLE IF NOT EXISTS VStitch_Orders (
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON VStitch_Orders (VstitchUserId);
 CREATE INDEX IF NOT EXISTS idx_orders_status ON VStitch_Orders (OrderStatus);
 CREATE INDEX IF NOT EXISTS idx_orders_created_date ON VStitch_Orders (created_date);
+CREATE INDEX IF NOT EXISTS idx_orders_shiprocket_order_id ON VStitch_Orders (ShiprocketOrderId);

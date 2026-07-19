@@ -10,6 +10,12 @@ CREATE TABLE IF NOT EXISTS VStitch_ProductVariants (
     Price                    NUMERIC(10,2) NOT NULL CHECK (Price >= 0),
     StockQuantity            INTEGER       NOT NULL DEFAULT 0 CHECK (StockQuantity >= 0),
     IsActive                 BOOLEAN       NOT NULL DEFAULT TRUE,
+    -- Package weight/dimensions for shipment creation (Shiprocket) - nullable,
+    -- see migrations/0004_add_product_variant_shipping_dimensions.sql.
+    WeightKg                 NUMERIC(6,3)  CHECK (WeightKg IS NULL OR WeightKg > 0),
+    LengthCm                 NUMERIC(6,2)  CHECK (LengthCm IS NULL OR LengthCm >= 0.5),
+    BreadthCm                NUMERIC(6,2)  CHECK (BreadthCm IS NULL OR BreadthCm >= 0.5),
+    HeightCm                 NUMERIC(6,2)  CHECK (HeightCm IS NULL OR HeightCm >= 0.5),
     created_by               VARCHAR(250)  NOT NULL,
     created_date             TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by               VARCHAR(250),
