@@ -122,9 +122,29 @@ class ShipmentService:
         payload = self._build_shiprocket_payload(order)
         response = self.shiprocket_client.create_order(payload)
 
+        shiprocket_shipment_id = response.get("shipment_id")
         self.order_persistence.save_shiprocket_shipment_ids(
-            vstitch_order_id, response.get("order_id"), response.get("shipment_id"), "shiprocket-integration"
+            vstitch_order_id, response.get("order_id"), shiprocket_shipment_id, "shiprocket-integration"
         )
+
+        # Auto-assign AWB/courier right away, best-effort: the shipment above
+        # is already created and persisted, so a failure here (Shiprocket
+        # hiccup, no serviceable courier yet, etc.) must not be reported as
+        # shipment creation itself failing - it's caught and logged here, not
+        # re-raised, leaving assign_awb_for_order's ops endpoint as the
+        # manual recovery path for the rare case this doesn't succeed inline.
+        if shiprocket_shipment_id:
+            try:
+                self._assign_awb(vstitch_order_id, shiprocket_shipment_id)
+            except Exception:
+                logger.exception(
+                    "Shiprocket AWB assignment failed for VStitch order %s - shipment was created (Shiprocket "
+                    "order/shipment ids saved), but no courier/AWB is assigned yet - assign one manually via "
+                    "POST /ops/shipments/%s/awb.",
+                    vstitch_order_id,
+                    vstitch_order_id,
+                )
+
         return response
 
     def _build_shiprocket_payload(self, order):
@@ -303,19 +323,44 @@ class ShipmentService:
         """Assigns a courier/AWB to an already-created shipment and persists
         the result onto VStitch_Orders. Raises ValueError if the order has no
         Shiprocket shipment yet (create_shipment_for_order hasn't run/
-        succeeded for it) - there's nothing to assign a courier to.
+        succeeded for it) - there's nothing to assign a courier to - or if
+        one is already assigned, so a redundant/unaware manual call can never
+        silently overwrite a valid courier with a different one. This is
+        also the manual recovery path for an order whose shipment was
+        created but whose automatic AWB assignment (see
+        create_shipment_for_order) didn't succeed inline.
         """
         order = self.order_persistence.get_order_for_tracking(vstitch_order_id)
         if order is None:
             raise ValueError(f"Order {vstitch_order_id} was not found.")
         if order["shiprocket_shipment_id"] is None:
             raise ValueError(f"Order {vstitch_order_id} has no Shiprocket shipment yet - create it first.")
+        if order["awb_code"] is not None:
+            raise ValueError(
+                f"Order {vstitch_order_id} already has AWB {order['awb_code']} assigned - not re-assigning."
+            )
 
-        response = self.shiprocket_client.assign_awb(order["shiprocket_shipment_id"])
+        return self._assign_awb(vstitch_order_id, order["shiprocket_shipment_id"])
+
+    def _assign_awb(self, vstitch_order_id, shiprocket_shipment_id):
+        """Shared by assign_awb_for_order (manual, ops-triggered) and
+        create_shipment_for_order (automatic, right after shipment
+        creation) - Shiprocket auto-picks the courier since assign_awb takes
+        no preferred-courier parameter. Raises ValueError if the response
+        has no awb_code, rather than treating that as a silent no-op - a
+        200-with-no-courier-serviceable response (Shiprocket embeds
+        rejections in a 200 body, the same pattern its create-order endpoint
+        uses) must surface as a failure to the caller, since neither
+        create_shipment_for_order's log-and-continue nor an ops caller
+        checking the return value can catch a failure that raises nothing.
+        """
+        response = self.shiprocket_client.assign_awb(shiprocket_shipment_id)
         awb_code = _dig(response, "response", "data", "awb_code")
         courier_name = _dig(response, "response", "data", "courier_name")
-        if awb_code:
-            self.order_persistence.save_awb_details(vstitch_order_id, awb_code, courier_name, "shiprocket-ops")
+        if not awb_code:
+            error_message = _dig(response, "message") or response
+            raise ValueError(f"Shiprocket did not assign an AWB for shipment {shiprocket_shipment_id}: {error_message}")
+        self.order_persistence.save_awb_details(vstitch_order_id, awb_code, courier_name, "shiprocket-ops")
         return response
 
     def _resolve_shipment_ids(self, vstitch_order_ids):
