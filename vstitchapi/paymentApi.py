@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from starlette.concurrency import run_in_threadpool
 
 from vstitchDTO.createOrderRequestDTO import CreateOrderRequestDTO
 from vstitchDTO.paymentResponseDTO import CreatePaymentOrderResponseDTO
@@ -51,10 +52,13 @@ class PaymentApi:
     # Deliberately async here, unlike the rest of the API: Razorpay signs the
     # webhook over the exact raw request bytes, and Starlette only exposes
     # those via the async `request.body()` - there is no synchronous path to
-    # the unparsed body. The DB work this triggers is a handful of short,
-    # indexed statements on a route Razorpay calls far less often than a
-    # shopper browses the catalog, so briefly blocking the event loop here is
-    # an accepted, deliberate trade-off rather than an oversight.
+    # the unparsed body. handle_webhook_event itself now goes through
+    # run_in_threadpool rather than being called directly: on a capture
+    # event it makes real (non-DB) HTTP calls to Shiprocket with up to a
+    # 10s timeout each, and that can no longer be treated as "briefly
+    # blocking" the shared event loop the way the original handful of short,
+    # indexed DB statements could - every other request this worker is
+    # serving would stall for as long as Shiprocket takes to respond.
     #
     # No auth dependency: Razorpay calls this directly with no bearer token.
     # Security instead comes entirely from the HMAC-SHA256 signature check
@@ -73,7 +77,7 @@ class PaymentApi:
             raise HTTPException(status_code=400, detail="Invalid webhook signature.")
 
         try:
-            self.payment_service.handle_webhook_event(raw_body)
+            await run_in_threadpool(self.payment_service.handle_webhook_event, raw_body)
         except Exception:
             # A non-2xx response makes Razorpay retry the delivery later - safe
             # to ask for, since processing is idempotent on the event

@@ -1,11 +1,15 @@
 import hashlib
 import json
+import logging
 import uuid
 
 from vstitchDatabase.paymentPersistence import PaymentPersistence
 from vstitchDTO.paymentResponseDTO import CreatePaymentOrderResponseDTO
 from vstitchServices.orderService import OrderService
 from vstitchServices.razorpayClient import razorpay_client, to_paise
+from vstitchServices.shipmentService import ShipmentService
+
+logger = logging.getLogger(__name__)
 
 # Only these events change order/transaction state today - a young checkout
 # flow only needs to react to "did the money land or not". Every other
@@ -25,6 +29,10 @@ class PaymentService:
     def __init__(self):
         self.order_service = OrderService()
         self.payment_persistence = PaymentPersistence()
+        # Constructed lazily per capture event, not here - a Shiprocket
+        # config problem (e.g. SHIPROCKET_PICKUP_LOCATION unset) must never
+        # stop PaymentService itself from being usable for checkout/webhook
+        # signature verification, which have nothing to do with shipping.
 
     def create_payment_order(self, create_order_request_dto, vstitch_user_id, created_by_ip_address):
         # Validate/price first (read-only) - nothing is written or charged yet,
@@ -92,9 +100,15 @@ class PaymentService:
             return
 
         if event_type in CAPTURE_EVENT_TYPES and razorpay_order_id:
-            self.payment_persistence.mark_payment_captured(
+            vstitch_order_id = self.payment_persistence.mark_payment_captured(
                 razorpay_order_id, razorpay_payment_id, None, "razorpay-webhook"
             )
+            # None means this delivery didn't actually transition anything (a
+            # Razorpay retry of an already-applied capture, or an order in an
+            # unexpected state) - nothing new was placed, so there's nothing
+            # to ship.
+            if vstitch_order_id is not None:
+                self._create_shipment(vstitch_order_id)
         elif event_type in FAILURE_EVENT_TYPES and razorpay_order_id:
             failure_reason = payment_entity.get("error_description") or "Payment failed."
             self.payment_persistence.mark_payment_failed(
@@ -102,3 +116,28 @@ class PaymentService:
             )
 
         self.payment_persistence.mark_webhook_event_processed(event_fingerprint)
+
+    def _create_shipment(self, vstitch_order_id):
+        """Creates the Shiprocket shipment for a just-captured order. Never
+        raises: this runs inside webhook processing, where an uncaught
+        exception here would turn a successful, already-committed payment
+        capture into a non-2xx response - causing Razorpay to retry a
+        delivery that has nothing left to apply, without making the shipment
+        any more likely to succeed the second time. The order/payment state
+        is correct either way, so a shipment that fails to create is logged
+        (with the full exception) rather than raised - logger.exception is
+        the only record of it until this has its own retry-tracking table,
+        so losing that record would make the failure untraceable.
+        """
+        try:
+            ShipmentService().create_shipment_for_order(vstitch_order_id)
+        except Exception:
+            # Deliberately broad, not just ValueError: this is a cleanup-only
+            # call at a hard webhook boundary, so even an unexpected bug here
+            # (not just an expected Shiprocket/config failure) must not be
+            # allowed to look like the webhook itself failed.
+            logger.exception(
+                "Shiprocket shipment creation failed for VStitch order %s - payment/order state is "
+                "unaffected, but this order will need its shipment created manually.",
+                vstitch_order_id,
+            )

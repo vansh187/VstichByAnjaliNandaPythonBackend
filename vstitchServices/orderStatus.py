@@ -45,3 +45,19 @@ class OrderStatus:
         CANCELLED: (),
         DELIVERY_FAILED: (),
     }
+
+
+def old_statuses_that_can_reach(target_status):
+    """Reverse lookup over ALLOWED_TRANSITIONS: every status a guarded UPDATE
+    should accept as the *current* value in order to move a row to
+    target_status. Used by webhook-driven status updates (Shiprocket
+    tracking events) so an update is only ever applied when it's a genuinely
+    forward, valid transition - an out-of-order or duplicate-delivery
+    webhook that would otherwise move a row backwards (or resurrect a
+    terminal one) simply matches no row and is a safe no-op.
+    """
+    return tuple(
+        status
+        for status, reachable_statuses in OrderStatus.ALLOWED_TRANSITIONS.items()
+        if target_status in reachable_statuses
+    )
