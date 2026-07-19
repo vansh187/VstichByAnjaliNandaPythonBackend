@@ -50,6 +50,22 @@ def _dig(data, *keys):
         data = data.get(key)
     return data
 
+
+def _coerce_bigint(value):
+    """Returns value as an int if it cleanly represents one, else None -
+    ShiprocketOrderId is a BIGINT column, and Shiprocket's own "Test Webhook"
+    button sends placeholder text (e.g. "dummpy shiprocket order id 123") in
+    that field, which must never reach the query as-is or Postgres raises
+    InvalidTextRepresentation.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    return None
+
 # VStitch_Orders.PaymentMethod values -> Shiprocket's own payment_method
 # strings ("COD" collects cash on delivery from the customer; "Prepaid" is
 # used for the already-paid-at-the-gateway Razorpay path).
@@ -354,9 +370,11 @@ class ShipmentService:
         a webhook, not bugs, so none of them should turn into a 500 that
         makes Shiprocket retry a delivery that will never resolve.
         """
-        shiprocket_order_id = _dig(payload, "order_id") or _dig(payload, "sr_order_id")
+        shiprocket_order_id = _coerce_bigint(_dig(payload, "order_id")) or _coerce_bigint(_dig(payload, "sr_order_id"))
         if not shiprocket_order_id:
-            logger.info("Shiprocket tracking webhook had no order_id/sr_order_id - ignoring. Payload: %s", payload)
+            logger.info(
+                "Shiprocket tracking webhook had no numeric order_id/sr_order_id - ignoring. Payload: %s", payload
+            )
             return
 
         order = self.order_persistence.find_order_by_shiprocket_order_id(shiprocket_order_id)
