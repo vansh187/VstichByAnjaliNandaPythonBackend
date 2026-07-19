@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,8 +10,20 @@ from vstitchapi.loginapi import login_router
 from vstitchapi.orderapi import order_router
 from vstitchapi.paymentApi import payment_router
 from vstitchapi.productapi import product_router
+from vstitchapi.shipmentApi import shipment_router
+from vstitchapi.shipmentOpsApi import shipment_ops_router
 from vstitchapi.signupapi import signup_router
 from vstitchDatabase.schemaPersistence import SchemaPersistence
+
+# Root config for every module-level `logging.getLogger(__name__)` in the
+# app (e.g. PaymentService's shipment-failure logging) - without this call
+# those loggers fall back to the "handler of last resort", which prints
+# only WARNING+ with no timestamp/module name, so failures are hard to find
+# and correlate in production logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 @asynccontextmanager
@@ -37,6 +50,8 @@ app.include_router(payment_router)
 app.include_router(product_router)
 app.include_router(category_router)
 app.include_router(best_seller_router)
+app.include_router(shipment_router)
+app.include_router(shipment_ops_router)
 
 
 @app.get("/")
