@@ -1,0 +1,60 @@
+find_transaction_by_razorpay_order_id: |
+  SELECT VstitchPaymentTransactionId, VstitchOrderId, PaymentStatus, Amount, Currency
+  FROM VStitch_PaymentTransactions
+  WHERE RazorpayOrderId = %s;
+
+update_transaction_status: |
+  -- old_statuses gates the update so a delayed/duplicate webhook can never move
+  -- a transaction backwards (e.g. a late 'authorized' retry landing after
+  -- 'captured' already processed) - the row simply isn't touched if it has
+  -- already moved past the states this call expects to find it in.
+  UPDATE VStitch_PaymentTransactions
+  SET PaymentStatus = %(new_status)s,
+      RazorpayPaymentId = COALESCE(%(razorpay_payment_id)s, RazorpayPaymentId),
+      RazorpaySignature = COALESCE(%(razorpay_signature)s, RazorpaySignature),
+      FailureReason = %(failure_reason)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE RazorpayOrderId = %(razorpay_order_id)s
+    AND PaymentStatus = ANY(%(old_statuses)s)
+  RETURNING VstitchPaymentTransactionId, VstitchOrderId;
+
+update_order_status: |
+  -- old_status gates the update the same way, so a webhook retry (or two
+  -- webhooks racing) can never double-apply the payment_pending -> placed /
+  -- payment_pending -> payment_failed transition.
+  UPDATE VStitch_Orders
+  SET OrderStatus = %(new_status)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchOrderId = %(vstitch_order_id)s
+    AND OrderStatus = %(old_status)s
+  RETURNING VstitchOrderId;
+
+restock_variants_for_order: |
+  -- Reverses exactly the quantities decrement_variant_stock_bulk took at
+  -- order-creation time for this order, keyed off the order's own line items
+  -- rather than the payment payload - correct regardless of what Razorpay's
+  -- webhook body does or doesn't include.
+  UPDATE VStitch_ProductVariants pv
+  SET StockQuantity = pv.StockQuantity + oi.Quantity,
+      updated_date = CURRENT_TIMESTAMP
+  FROM VStitch_OrderItems oi
+  WHERE oi.VstitchOrderId = %s
+    AND pv.VstitchProductVariantId = oi.VstitchProductVariantId;
+
+mark_webhook_event_processed: |
+  UPDATE VStitch_PaymentWebhookEvents
+  SET ProcessedSuccessfully = TRUE
+  WHERE RazorpayEventId = %s;
+
+insert_webhook_event: |
+  -- ON CONFLICT DO NOTHING makes this the idempotency gate for the whole
+  -- webhook handler: a replayed delivery (same EventFingerprint) inserts zero
+  -- rows and RETURNING yields no row, which the caller reads as "already
+  -- processed, skip".
+  INSERT INTO VStitch_PaymentWebhookEvents
+      (RazorpayEventId, EventType, RazorpayOrderId, RazorpayPaymentId, Payload, ProcessedSuccessfully)
+  VALUES (%s, %s, %s, %s, %s, %s)
+  ON CONFLICT (RazorpayEventId) DO NOTHING
+  RETURNING VstitchPaymentWebhookEventId;
