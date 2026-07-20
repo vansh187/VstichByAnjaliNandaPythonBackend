@@ -1,0 +1,27 @@
+create_admin_users_table: |
+  CREATE TABLE IF NOT EXISTS VStitch_AdminUsers (
+      VstitchAdminId    BIGSERIAL     PRIMARY KEY,
+      AdminUsername     VARCHAR(250)  NOT NULL,
+      AdminPassword     VARCHAR(250)  NOT NULL,
+      Email             VARCHAR(250)  NOT NULL,
+      IsActive          BOOLEAN       NOT NULL DEFAULT TRUE,
+      created_by        VARCHAR(250)  NOT NULL,
+      created_date      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by        VARCHAR(250),
+      updated_date      TIMESTAMP,
+
+      CONSTRAINT uq_admin_users_username UNIQUE (AdminUsername),
+      CONSTRAINT uq_admin_users_email UNIQUE (Email)
+  );
+
+get_admin_by_username: |
+  SELECT VstitchAdminId, AdminUsername, AdminPassword, Email, IsActive
+  FROM VStitch_AdminUsers
+  WHERE AdminUsername = %s;
+
+insert_admin: |
+  INSERT INTO VStitch_AdminUsers
+      (AdminUsername, AdminPassword, Email, created_by, created_date)
+  VALUES
+      (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+  RETURNING VstitchAdminId, AdminUsername, Email, created_date;
