@@ -3,3 +3,50 @@ list_active_categories: |
   FROM VStitch_Categories
   WHERE IsActive = TRUE
   ORDER BY ParentCategoryId NULLS FIRST, CategoryName;
+
+# --- Admin: category management ------------------------------------------
+
+list_all_categories_admin: |
+  -- Same as list_active_categories but includes inactive rows (so an admin
+  -- can find and re-enable one) and IsActive itself in the projection.
+  SELECT VstitchCategoryId, CategoryName, ParentCategoryId, ImageUrl, IsActive
+  FROM VStitch_Categories
+  ORDER BY ParentCategoryId NULLS FIRST, CategoryName;
+
+get_category_by_id_admin: |
+  SELECT VstitchCategoryId, CategoryName, ParentCategoryId, ImageUrl, IsActive
+  FROM VStitch_Categories
+  WHERE VstitchCategoryId = %s;
+
+insert_category: |
+  INSERT INTO VStitch_Categories
+      (CategoryName, ParentCategoryId, ImageUrl, created_by, created_date)
+  VALUES
+      (%(category_name)s, %(parent_category_id)s, %(image_url)s, %(created_by)s, CURRENT_TIMESTAMP)
+  RETURNING VstitchCategoryId, CategoryName, ParentCategoryId, ImageUrl, IsActive;
+
+update_category: |
+  -- Full-row update, not a dynamic partial SET - the service layer merges
+  -- the caller's partial UpdateCategoryRequestDTO onto the current row
+  -- first, so this always receives fully-resolved values. Simpler and
+  -- safer than building SQL dynamically per supplied field.
+  UPDATE VStitch_Categories
+  SET CategoryName = %(category_name)s,
+      ParentCategoryId = %(parent_category_id)s,
+      ImageUrl = %(image_url)s,
+      IsActive = %(is_active)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchCategoryId = %(vstitch_category_id)s
+  RETURNING VstitchCategoryId, CategoryName, ParentCategoryId, ImageUrl, IsActive;
+
+soft_delete_category: |
+  -- Never a real DELETE - VStitch_Products FKs to this table with
+  -- ON DELETE SET NULL, so a hard delete would silently orphan every
+  -- product in the category rather than reject the operation.
+  UPDATE VStitch_Categories
+  SET IsActive = FALSE,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchCategoryId = %(vstitch_category_id)s
+  RETURNING VstitchCategoryId;
