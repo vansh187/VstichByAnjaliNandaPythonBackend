@@ -1,4 +1,5 @@
 import os
+from urllib.parse import quote
 
 import requests
 
@@ -161,6 +162,15 @@ class ShiprocketClient:
     def track_order(self, shiprocket_order_id):
         """GET /courier/track?order_id="""
         return self._request("GET", "/courier/track", params={"order_id": shiprocket_order_id})
+
+    def track_by_awb(self, awb_code):
+        """GET /courier/track/awb/{awb_code} - unlike track_order (which
+        returned an empty shipment_track for a live order during testing),
+        this endpoint reliably returns the shipment's current tracking state
+        keyed by AWB, so it's the one used for admin-triggered status
+        reconciliation (see ShipmentService.sync_order_status_from_shiprocket).
+        """
+        return self._request("GET", f"/courier/track/awb/{quote(str(awb_code), safe='')}")
 
     def cancel_orders(self, shiprocket_order_ids):
         """POST /orders/cancel - only works pre-dispatch; once picked up,

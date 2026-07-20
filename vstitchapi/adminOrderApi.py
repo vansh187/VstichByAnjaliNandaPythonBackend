@@ -7,6 +7,7 @@ from vstitchDTO.adminOrderResponseDTO import AdminOrderListResponseDTO, AdminOrd
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminOrderService import AdminOrderService
 from vstitchServices.orderStatus import OrderStatus
+from vstitchServices.shipmentService import ShipmentService
 
 
 class AdminOrderApi:
@@ -35,6 +36,12 @@ class AdminOrderApi:
             "/orders/{vstitch_order_id}/status",
             self.update_order_status,
             methods=["PATCH"],
+            response_model=AdminOrderResponseDTO,
+        )
+        self.router.add_api_route(
+            "/orders/{vstitch_order_id}/sync-status",
+            self.sync_order_status,
+            methods=["POST"],
             response_model=AdminOrderResponseDTO,
         )
 
@@ -100,6 +107,31 @@ class AdminOrderApi:
             raise HTTPException(
                 status_code=500,
                 detail="Something went wrong while updating the order status. Please try again later.",
+            )
+
+    def sync_order_status(self, vstitch_order_id: int = Path(..., ge=1)):
+        """Manual 'refresh status' action: pulls the order's live status from
+        Shiprocket and applies it if it's changed - the fallback for when the
+        Shiprocket tracking webhook never fired for this order (see
+        ShipmentService.sync_order_status_from_shiprocket).
+        """
+        try:
+            # Constructed here, not in __init__: ShipmentService's constructor
+            # raises if SHIPROCKET_PICKUP_LOCATION isn't configured, and this
+            # class is instantiated once at import time - a per-instance
+            # ShipmentService would crash the whole app at startup (every
+            # order/category/product endpoint, not just this one) on a
+            # missing Shiprocket env var. Same reasoning as
+            # shipmentRouterFactory.py's handlers, which all construct
+            # ShipmentService() per call rather than once in a router class.
+            ShipmentService().sync_order_status_from_shiprocket(vstitch_order_id)
+            return self.admin_order_service.get_order(vstitch_order_id)
+        except ValueError as validation_error:
+            raise HTTPException(status_code=409, detail=str(validation_error))
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail="Something went wrong syncing the order status from Shiprocket. Please try again later.",
             )
 
 

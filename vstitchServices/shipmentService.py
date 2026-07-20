@@ -428,6 +428,51 @@ class ShipmentService:
     def take_ndr_action(self, ndr_action_payload):
         return self.shiprocket_client.take_ndr_action(ndr_action_payload)
 
+    def sync_order_status_from_shiprocket(self, vstitch_order_id):
+        """Admin-triggered reconciliation for when the tracking webhook never
+        fired for an order (not yet configured, missed delivery, timing gap)
+        and VStitch_Orders.OrderStatus has drifted from Shiprocket's actual
+        status. Pulls the live status by AWB (see ShiprocketClient.
+        track_by_awb) and applies it through the exact same status map and
+        guarded update handle_tracking_webhook uses, so this can never push
+        an invalid/backwards transition either. Raises ValueError (-> 409 at
+        the API layer) if the order doesn't exist or has no AWB assigned yet
+        - there's nothing to reconcile against in that case.
+        """
+        order = self.order_persistence.get_order_for_tracking(vstitch_order_id)
+        if order is None:
+            raise ValueError(f"Order {vstitch_order_id} was not found.")
+        if order["awb_code"] is None:
+            raise ValueError(f"Order {vstitch_order_id} has no AWB assigned yet - nothing to sync against.")
+
+        response = self.shiprocket_client.track_by_awb(order["awb_code"])
+        shipment_track = _dig(response, "tracking_data", "shipment_track")
+        current_status_text = ""
+        if isinstance(shipment_track, list) and shipment_track:
+            # _dig, not shipment_track[-1].get(...): the last entry isn't
+            # guaranteed to be a dict if Shiprocket's response shape ever
+            # deviates from what's documented (same defensive stance _dig
+            # exists for elsewhere in this file) - a bare .get() here would
+            # raise AttributeError on a malformed entry instead of just
+            # falling through to the "unmapped status" no-op below.
+            current_status_text = (_dig(shipment_track[-1], "current_status") or "").strip().upper()
+
+        old_status = order["order_status"]
+        new_order_status = SHIPROCKET_STATUS_TO_ORDER_STATUS.get(current_status_text)
+        if new_order_status is None or new_order_status == old_status:
+            return {"vstitch_order_id": vstitch_order_id, "old_status": old_status, "new_status": old_status, "updated": False}
+
+        old_statuses = old_statuses_that_can_reach(new_order_status)
+        was_updated = bool(old_statuses) and self.order_persistence.update_order_status(
+            vstitch_order_id, new_order_status, old_statuses, "shiprocket-sync"
+        )
+        return {
+            "vstitch_order_id": vstitch_order_id,
+            "old_status": old_status,
+            "new_status": new_order_status if was_updated else old_status,
+            "updated": was_updated,
+        }
+
     # --- Inbound tracking webhook --------------------------------------
 
     def handle_tracking_webhook(self, payload):
