@@ -96,3 +96,138 @@ get_images_for_product: |
   FROM VStitch_ProductImages
   WHERE VstitchProductId = %s
   ORDER BY IsPrimary DESC, DisplayOrder ASC;
+
+# --- Admin: revenue dashboard --------------------------------------------
+
+low_stock_variant_count: |
+  SELECT COUNT(*) FROM VStitch_ProductVariants WHERE IsActive = TRUE AND StockQuantity <= %s;
+
+# --- Admin: product/category management ----------------------------------
+
+list_products_admin: |
+  -- Admin counterpart to list_products_page: includes inactive products,
+  -- and returns full variant/image detail per product (not just card-level
+  -- min/max price) via a bulk fetch afterward in the persistence layer,
+  -- keyset-paginated the same way.
+  SELECT p.VstitchProductId, p.ProductName, p.Description, p.VstitchCategoryId, c.CategoryName,
+         p.BasePrice, p.IsActive
+  FROM VStitch_Products p
+  JOIN VStitch_Categories c ON c.VstitchCategoryId = p.VstitchCategoryId
+  WHERE (%(after_id)s::BIGINT IS NULL OR p.VstitchProductId > %(after_id)s)
+  ORDER BY p.VstitchProductId ASC
+  LIMIT %(limit_plus_one)s;
+
+get_product_by_id_admin: |
+  SELECT p.VstitchProductId, p.ProductName, p.Description, p.VstitchCategoryId, c.CategoryName,
+         p.BasePrice, p.IsActive
+  FROM VStitch_Products p
+  JOIN VStitch_Categories c ON c.VstitchCategoryId = p.VstitchCategoryId
+  WHERE p.VstitchProductId = %s;
+
+get_variants_for_product_admin: |
+  -- Unlike get_variants_for_product, includes inactive variants and their
+  -- shipping-dimension columns - an admin editing a product needs to see
+  -- (and fix) exactly what create_shipment_for_order will reject on.
+  SELECT VstitchProductVariantId, Sku, Size, Color, Price, StockQuantity, IsActive,
+         WeightKg, LengthCm, BreadthCm, HeightCm
+  FROM VStitch_ProductVariants
+  WHERE VstitchProductId = %s
+  ORDER BY Size, Color;
+
+insert_product: |
+  INSERT INTO VStitch_Products
+      (ProductName, Description, VstitchCategoryId, BasePrice, IsActive, created_by, created_date)
+  VALUES
+      (%(product_name)s, %(description)s, %(category_id)s, %(base_price)s, %(is_active)s, %(created_by)s, CURRENT_TIMESTAMP)
+  RETURNING VstitchProductId;
+
+update_product: |
+  UPDATE VStitch_Products
+  SET ProductName = %(product_name)s,
+      Description = %(description)s,
+      VstitchCategoryId = %(category_id)s,
+      BasePrice = %(base_price)s,
+      IsActive = %(is_active)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchProductId = %(vstitch_product_id)s
+  RETURNING VstitchProductId;
+
+soft_delete_product: |
+  -- Never a real DELETE - VStitch_ProductVariants FKs to this with
+  -- ON DELETE CASCADE, so a hard delete would cascade-delete every variant
+  -- (and, transitively, wipe them out of every customer's cart).
+  UPDATE VStitch_Products
+  SET IsActive = FALSE,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchProductId = %(vstitch_product_id)s
+  RETURNING VstitchProductId;
+
+insert_variant: |
+  INSERT INTO VStitch_ProductVariants
+      (VstitchProductId, Sku, Size, Color, Price, StockQuantity, IsActive,
+       WeightKg, LengthCm, BreadthCm, HeightCm, created_by, created_date)
+  VALUES
+      (%(vstitch_product_id)s, %(sku)s, %(size)s, %(color)s, %(price)s, %(stock_quantity)s, %(is_active)s,
+       %(weight_kg)s, %(length_cm)s, %(breadth_cm)s, %(height_cm)s, %(created_by)s, CURRENT_TIMESTAMP)
+  RETURNING VstitchProductVariantId;
+
+get_variants_for_products_admin: |
+  -- Bulk counterpart to get_variants_for_product_admin, for an entire page
+  -- of products at once (see ProductPersistence.get_variants_for_products_admin).
+  SELECT VstitchProductId, VstitchProductVariantId, Sku, Size, Color, Price, StockQuantity, IsActive,
+         WeightKg, LengthCm, BreadthCm, HeightCm
+  FROM VStitch_ProductVariants
+  WHERE VstitchProductId = ANY(%s)
+  ORDER BY VstitchProductId, Size, Color;
+
+get_images_for_products_admin: |
+  -- Bulk counterpart to get_images_for_product (admin shape), for an entire
+  -- page of products at once (see ProductPersistence.get_images_for_products_admin).
+  SELECT VstitchProductId, ImageUrl, IsPrimary, DisplayOrder
+  FROM VStitch_ProductImages
+  WHERE VstitchProductId = ANY(%s)
+  ORDER BY VstitchProductId, IsPrimary DESC, DisplayOrder ASC;
+
+get_variant_by_id_admin: |
+  SELECT VstitchProductVariantId, VstitchProductId, Sku, Size, Color, Price, StockQuantity, IsActive,
+         WeightKg, LengthCm, BreadthCm, HeightCm
+  FROM VStitch_ProductVariants
+  WHERE VstitchProductVariantId = %s;
+
+update_variant: |
+  UPDATE VStitch_ProductVariants
+  SET Sku = %(sku)s,
+      Size = %(size)s,
+      Color = %(color)s,
+      Price = %(price)s,
+      StockQuantity = %(stock_quantity)s,
+      IsActive = %(is_active)s,
+      WeightKg = %(weight_kg)s,
+      LengthCm = %(length_cm)s,
+      BreadthCm = %(breadth_cm)s,
+      HeightCm = %(height_cm)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchProductVariantId = %(vstitch_product_variant_id)s
+  RETURNING VstitchProductVariantId;
+
+soft_delete_variant: |
+  -- Never a real DELETE - VStitch_CartItems FKs to this with ON DELETE
+  -- CASCADE, so a hard delete would silently vanish the variant out of
+  -- every customer's live cart.
+  UPDATE VStitch_ProductVariants
+  SET IsActive = FALSE,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchProductVariantId = %(vstitch_product_variant_id)s
+  RETURNING VstitchProductVariantId;
+
+insert_image: |
+  INSERT INTO VStitch_ProductImages
+      (VstitchProductId, VstitchProductVariantId, ImageUrl, IsPrimary, DisplayOrder, created_by, created_date)
+  VALUES
+      (%(vstitch_product_id)s, %(vstitch_product_variant_id)s, %(image_url)s, %(is_primary)s, %(display_order)s,
+       %(created_by)s, CURRENT_TIMESTAMP)
+  RETURNING VstitchProductImageId;
