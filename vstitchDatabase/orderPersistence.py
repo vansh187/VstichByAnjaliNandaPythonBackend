@@ -93,6 +93,198 @@ class OrderPersistence:
                 )
             return items_by_order_id
 
+    # --- Admin: cross-customer order management --------------------------
+
+    def list_orders_for_admin(self, status, payment_method, search, after_id, limit_plus_one):
+        """Same keyset-pagination shape as get_orders_for_user, but across
+        every customer, with status/payment_method/search filters and the
+        placing customer's name/email joined in."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("list_orders_for_admin"),
+                    {
+                        "status": status,
+                        "payment_method": payment_method,
+                        "search": search,
+                        "after_id": after_id,
+                        "limit_plus_one": limit_plus_one,
+                    },
+                )
+                order_rows = cursor.fetchall()
+            return [dict(zip(self._admin_order_column_names(), row)) for row in order_rows]
+
+    def get_order_for_admin(self, vstitch_order_id):
+        """Single order, any customer - the detail/drawer-view counterpart
+        to list_orders_for_admin. Returns None if the order doesn't exist."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(self.query_loader.get_query("get_order_for_admin"), (vstitch_order_id,))
+                order_row = cursor.fetchone()
+            if order_row is None:
+                return None
+            return dict(zip(self._admin_order_column_names(), order_row))
+
+    @staticmethod
+    def _admin_order_column_names():
+        return (
+            "vstitch_order_id",
+            "vstitch_user_id",
+            "customer_name",
+            "customer_email",
+            "order_status",
+            "payment_method",
+            "total_amount",
+            "shipping_recipient_name",
+            "shipping_address_line1",
+            "shipping_address_line2",
+            "shipping_city",
+            "shipping_state",
+            "shipping_postal_code",
+            "shipping_country",
+            "shipping_phone_number",
+            "awb_code",
+            "courier_name",
+            "created_date",
+        )
+
+    def get_order_items_for_orders_admin(self, vstitch_order_ids):
+        """Admin counterpart to get_order_items_for_orders - same bulk-fetch-
+        by-order-ids shape, but includes vstitch_order_item_id and uses the
+        admin contract's field names (product_name_snapshot etc.)."""
+        if not vstitch_order_ids:
+            return {}
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("get_order_items_for_orders_admin"),
+                    (vstitch_order_ids,),
+                )
+                item_rows = cursor.fetchall()
+            items_by_order_id = {}
+            for row in item_rows:
+                items_by_order_id.setdefault(row[0], []).append(
+                    {
+                        "vstitch_order_item_id": row[1],
+                        "product_name_snapshot": row[2],
+                        "size_snapshot": row[3],
+                        "color_snapshot": row[4],
+                        "unit_price_snapshot": row[5],
+                        "quantity": row[6],
+                    }
+                )
+            return items_by_order_id
+
+    def update_order_status_admin(self, vstitch_order_id, new_status, updated_by):
+        """Ungated admin override - see update_order_status_admin's own
+        comment in order_queries.yaml for why this doesn't gate on the old
+        status the way update_order_status/update_order_status_guarded do.
+        Returns True if the order existed and was updated, False if not.
+        """
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("update_order_status_admin"),
+                    {
+                        "new_status": new_status,
+                        "updated_by": updated_by,
+                        "vstitch_order_id": vstitch_order_id,
+                    },
+                )
+                order_row = cursor.fetchone()
+            connection.commit()
+            return order_row is not None
+
+    # --- Admin: revenue dashboard -----------------------------------------
+
+    def get_revenue_for_period(self, from_date, to_date):
+        """Returns (revenue, orders_count) for the given date range - pass
+        (None, None) for all-time totals."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("revenue_for_period"),
+                    {"from_date": from_date, "to_date": to_date},
+                )
+                revenue, orders_count = cursor.fetchone()
+            return revenue, orders_count
+
+    def get_revenue_daily(self, from_date, to_date):
+        """One row per calendar day with orders in range: (day, revenue, orders_count)."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("revenue_daily"),
+                    {"from_date": from_date, "to_date": to_date},
+                )
+                return cursor.fetchall()
+
+    def count_pending_orders(self):
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(self.query_loader.get_query("pending_orders_count"))
+                return cursor.fetchone()[0]
+
+    def count_pending_shipments(self):
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(self.query_loader.get_query("pending_shipments_count"))
+                return cursor.fetchone()[0]
+
+    # --- Admin: returns ------------------------------------------------
+
+    def list_returns_for_admin(self, status, after_id, limit_plus_one):
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("list_returns_for_admin"),
+                    {"status": status, "after_id": after_id, "limit_plus_one": limit_plus_one},
+                )
+                rows = cursor.fetchall()
+            column_names = (
+                "vstitch_return_order_id",
+                "vstitch_order_id",
+                "customer_name",
+                "customer_email",
+                "reason",
+                "status",
+                "shiprocket_return_order_id",
+                "shiprocket_shipment_id",
+                "created_date",
+            )
+            return [dict(zip(column_names, row)) for row in rows]
+
+    def update_return_status_admin(self, vstitch_return_order_id, new_status, updated_by):
+        """Free-form admin override, same shape as update_order_status_admin.
+        Returns the updated return row (same shape as list_returns_for_admin),
+        or None if the return doesn't exist."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("update_return_status_admin"),
+                    {
+                        "new_status": new_status,
+                        "updated_by": updated_by,
+                        "vstitch_return_order_id": vstitch_return_order_id,
+                    },
+                )
+                row = cursor.fetchone()
+            connection.commit()
+            if row is None:
+                return None
+            column_names = (
+                "vstitch_return_order_id",
+                "vstitch_order_id",
+                "customer_name",
+                "customer_email",
+                "reason",
+                "status",
+                "shiprocket_return_order_id",
+                "shiprocket_shipment_id",
+                "created_date",
+            )
+            return dict(zip(column_names, row))
+
     def get_order_for_shipment(self, vstitch_order_id):
         """Fetches everything a Shiprocket create-order call needs for one
         order: the header (address/contact/payment) plus its line items with
