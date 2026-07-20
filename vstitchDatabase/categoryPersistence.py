@@ -1,8 +1,9 @@
 import psycopg2.errors
 
 from vstitchDatabase.ConnectionFactory import connection_factory
+from vstitchDatabase.invalidReferenceError import InvalidReferenceError
 from vstitchDatabase.queryLoader import QueryLoader
-from vstitchDatabase.uniqueConstraintError import UniqueConstraintError
+from vstitchDatabase.uniqueConstraintError import translate_unique_violation
 
 # Constraint/index names from vstitch_categories.sql - translated into a
 # human-readable ValueError message when INSERT/UPDATE hits either one.
@@ -67,9 +68,12 @@ class CategoryPersistence:
                     )
                 except psycopg2.errors.UniqueViolation as unique_violation:
                     connection.rollback()
-                    raise UniqueConstraintError(
-                        self._translate_unique_violation(unique_violation)
+                    raise translate_unique_violation(
+                        unique_violation, CATEGORY_UNIQUE_CONSTRAINT_MESSAGES, "A category with conflicting details already exists."
                     ) from unique_violation
+                except psycopg2.errors.ForeignKeyViolation as fk_violation:
+                    connection.rollback()
+                    raise InvalidReferenceError(f"Parent category {parent_category_id} does not exist.") from fk_violation
                 row = cursor.fetchone()
             connection.commit()
             return dict(zip(ADMIN_CATEGORY_COLUMNS, row))
@@ -95,9 +99,12 @@ class CategoryPersistence:
                     )
                 except psycopg2.errors.UniqueViolation as unique_violation:
                     connection.rollback()
-                    raise UniqueConstraintError(
-                        self._translate_unique_violation(unique_violation)
+                    raise translate_unique_violation(
+                        unique_violation, CATEGORY_UNIQUE_CONSTRAINT_MESSAGES, "A category with conflicting details already exists."
                     ) from unique_violation
+                except psycopg2.errors.ForeignKeyViolation as fk_violation:
+                    connection.rollback()
+                    raise InvalidReferenceError(f"Parent category {parent_category_id} does not exist.") from fk_violation
                 row = cursor.fetchone()
             connection.commit()
             return dict(zip(ADMIN_CATEGORY_COLUMNS, row)) if row is not None else None
@@ -115,10 +122,3 @@ class CategoryPersistence:
                 row = cursor.fetchone()
             connection.commit()
             return row is not None
-
-    @staticmethod
-    def _translate_unique_violation(unique_violation):
-        constraint_name = getattr(unique_violation.diag, "constraint_name", None)
-        return CATEGORY_UNIQUE_CONSTRAINT_MESSAGES.get(
-            constraint_name, "A category with conflicting details already exists."
-        )

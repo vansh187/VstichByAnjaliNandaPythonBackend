@@ -2,10 +2,11 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
-from vstitchDTO.adminOrderRequestDTO import UpdateOrderStatusRequestDTO
+from vstitchDTO.adminOrderRequestDTO import VALID_PAYMENT_METHODS, UpdateOrderStatusRequestDTO
 from vstitchDTO.adminOrderResponseDTO import AdminOrderListResponseDTO, AdminOrderResponseDTO
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminOrderService import AdminOrderService
+from vstitchServices.orderStatus import OrderStatus
 
 
 class AdminOrderApi:
@@ -48,6 +49,20 @@ class AdminOrderApi:
         after_id: Optional[int] = Query(default=None, ge=1),
         limit: int = Query(default=20, ge=1, le=100),
     ):
+        # Validated here rather than left to the SQL's exact-match filter,
+        # which would otherwise silently return zero rows on a typo/wrong
+        # case instead of a clear 422 - same "validate at the request
+        # boundary" convention as UpdateOrderStatusRequestDTO.
+        if status is not None and status not in OrderStatus.ALLOWED_TRANSITIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"status must be one of {tuple(OrderStatus.ALLOWED_TRANSITIONS.keys())}.",
+            )
+        if payment_method is not None and payment_method not in VALID_PAYMENT_METHODS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"payment_method must be one of {VALID_PAYMENT_METHODS}.",
+            )
         try:
             return self.admin_order_service.list_orders(status, payment_method, search, after_id, limit)
         except Exception:

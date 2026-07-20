@@ -2,6 +2,11 @@ from pydantic import BaseModel, field_validator
 
 from vstitchServices.orderStatus import OrderStatus
 
+# VStitch_Orders.PaymentMethod's CHECK-constraint values - single source of
+# truth for validating the admin order-list filter, same idea as
+# UpdateOrderStatusRequestDTO validating against OrderStatus.ALLOWED_TRANSITIONS.
+VALID_PAYMENT_METHODS = ("cod", "razorpay")
+
 
 class UpdateOrderStatusRequestDTO(BaseModel):
     order_status: str

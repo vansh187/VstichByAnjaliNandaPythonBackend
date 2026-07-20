@@ -22,10 +22,21 @@ class AdminJwtTokenService:
         self.jwt_secret = os.getenv("ADMIN_JWT_SECRET")
         self.jwt_algorithm = os.getenv("ADMIN_JWT_ALGORITHM", "HS256")
         self.access_token_expire_minutes = int(os.getenv("ADMIN_JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+        # Deliberately not validated here: this class is instantiated at
+        # import time by every admin router module (adminAuthDependency.py's
+        # module-level get_current_admin dependency, AdminAuthApi's
+        # AdminAuthService()), so raising in __init__ would mean a missing
+        # ADMIN_JWT_SECRET crashes the whole app at startup - including every
+        # existing, unrelated customer endpoint - instead of failing only the
+        # admin surface that actually needs it. The check is deferred to
+        # actual use below.
+
+    def _require_secret(self):
         if not self.jwt_secret:
             raise ValueError("ADMIN_JWT_SECRET must be configured in the environment.")
 
     def generate_access_token(self, vstitch_admin_id, admin_username):
+        self._require_secret()
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.access_token_expire_minutes)
         token_payload = {
             "sub": str(vstitch_admin_id),
@@ -36,6 +47,7 @@ class AdminJwtTokenService:
         return jwt.encode(token_payload, self.jwt_secret, algorithm=self.jwt_algorithm)
 
     def decode_access_token(self, access_token):
+        self._require_secret()
         try:
             return jwt.decode(access_token, self.jwt_secret, algorithms=[self.jwt_algorithm])
         except JWTError as token_error:

@@ -2,6 +2,7 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 
+from vstitchDatabase.invalidReferenceError import InvalidReferenceError
 from vstitchDatabase.uniqueConstraintError import UniqueConstraintError
 from vstitchDTO.adminCategoryRequestDTO import CreateCategoryRequestDTO, UpdateCategoryRequestDTO
 from vstitchDTO.adminCategoryResponseDTO import AdminCategoryResponseDTO
@@ -64,6 +65,8 @@ class AdminCategoryApi:
             )
         except UniqueConstraintError as conflict_error:
             raise HTTPException(status_code=409, detail=str(conflict_error))
+        except InvalidReferenceError as invalid_reference_error:
+            raise HTTPException(status_code=422, detail=str(invalid_reference_error))
         except Exception:
             raise HTTPException(
                 status_code=500,
@@ -82,6 +85,8 @@ class AdminCategoryApi:
             )
         except UniqueConstraintError as conflict_error:
             raise HTTPException(status_code=409, detail=str(conflict_error))
+        except InvalidReferenceError as invalid_reference_error:
+            raise HTTPException(status_code=422, detail=str(invalid_reference_error))
         except ValueError as not_found_error:
             raise HTTPException(status_code=404, detail=str(not_found_error))
         except Exception:
