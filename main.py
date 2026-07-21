@@ -13,6 +13,7 @@ from vstitchapi.adminRevenueApi import admin_revenue_router
 from vstitchapi.adminShipmentApi import admin_shipment_router
 from vstitchapi.bestSellerApi import best_seller_router
 from vstitchapi.categoryapi import category_router
+from vstitchapi.googleAuthApi import google_auth_router
 from vstitchapi.loginapi import login_router
 from vstitchapi.orderapi import order_router
 from vstitchapi.paymentApi import payment_router
@@ -53,6 +54,7 @@ app.add_middleware(
 
 app.include_router(signup_router)
 app.include_router(login_router)
+app.include_router(google_auth_router)
 app.include_router(order_router)
 app.include_router(payment_router)
 app.include_router(product_router)

@@ -9,6 +9,7 @@ colorama==0.4.6
 cryptography==49.0.0
 ecdsa==0.19.2
 fastapi==0.139.0
+google-auth==2.56.1
 greenlet==3.5.3
 h11==0.16.0
 idna==3.18
