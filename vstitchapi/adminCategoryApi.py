@@ -6,6 +6,7 @@ from vstitchDatabase.invalidReferenceError import InvalidReferenceError
 from vstitchDatabase.uniqueConstraintError import UniqueConstraintError
 from vstitchDTO.adminCategoryRequestDTO import CreateCategoryRequestDTO, UpdateCategoryRequestDTO
 from vstitchDTO.adminCategoryResponseDTO import AdminCategoryResponseDTO
+from vstitchServices.adminAuditLogService import admin_audit_log_service
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminCategoryService import AdminCategoryService
 
@@ -60,7 +61,7 @@ class AdminCategoryApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_category_service.create_category(
+            created_category = self.admin_category_service.create_category(
                 create_category_request_dto, current_admin["admin_username"]
             )
         except UniqueConstraintError as conflict_error:
@@ -72,6 +73,14 @@ class AdminCategoryApi:
                 status_code=500,
                 detail="Something went wrong while creating the category. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "create_category",
+            "category",
+            created_category.vstitch_category_id,
+            {"category_name": created_category.category_name, "parent_category_id": created_category.parent_category_id},
+        )
+        return created_category
 
     def update_category(
         self,
@@ -80,7 +89,7 @@ class AdminCategoryApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_category_service.update_category(
+            updated_category = self.admin_category_service.update_category(
                 vstitch_category_id, update_category_request_dto, current_admin["admin_username"]
             )
         except UniqueConstraintError as conflict_error:
@@ -94,6 +103,14 @@ class AdminCategoryApi:
                 status_code=500,
                 detail="Something went wrong while updating the category. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "update_category",
+            "category",
+            vstitch_category_id,
+            update_category_request_dto.model_dump(exclude_unset=True),
+        )
+        return updated_category
 
     def delete_category(
         self,
@@ -109,6 +126,9 @@ class AdminCategoryApi:
                 status_code=500,
                 detail="Something went wrong while deleting the category. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"], "delete_category", "category", vstitch_category_id
+        )
 
 
 admin_category_api = AdminCategoryApi()

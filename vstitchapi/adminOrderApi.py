@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from vstitchDTO.adminOrderRequestDTO import VALID_PAYMENT_METHODS, UpdateOrderStatusRequestDTO
 from vstitchDTO.adminOrderResponseDTO import AdminOrderListResponseDTO, AdminOrderResponseDTO
+from vstitchServices.adminAuditLogService import admin_audit_log_service
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminOrderService import AdminOrderService
 from vstitchServices.orderStatus import OrderStatus
@@ -96,7 +97,7 @@ class AdminOrderApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_order_service.update_order_status(
+            updated_order = self.admin_order_service.update_order_status(
                 vstitch_order_id,
                 update_order_status_request_dto.order_status,
                 current_admin["admin_username"],
@@ -108,6 +109,14 @@ class AdminOrderApi:
                 status_code=500,
                 detail="Something went wrong while updating the order status. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "update_order_status",
+            "order",
+            vstitch_order_id,
+            {"new_order_status": update_order_status_request_dto.order_status},
+        )
+        return updated_order
 
     def sync_order_status(self, vstitch_order_id: int = Path(..., ge=1)):
         """Manual 'refresh status' action: pulls the order's live status from

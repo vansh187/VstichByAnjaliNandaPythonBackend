@@ -10,6 +10,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from vstitchServices.rateLimiter import limiter
 from vstitchServices.securityHeadersMiddleware import SecurityHeadersMiddleware
+from vstitchapi.adminAuditLogApi import admin_audit_log_router
 from vstitchapi.adminAuthApi import admin_auth_router
 from vstitchapi.adminCategoryApi import admin_category_router
 from vstitchapi.adminOrderApi import admin_order_router
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
     schema_persistence = SchemaPersistence()
     schema_persistence.create_users_table_if_not_exists()
     schema_persistence.create_admin_users_table_if_not_exists()
+    schema_persistence.create_admin_audit_log_table_if_not_exists()
     yield
 
 
@@ -96,6 +98,7 @@ app.include_router(best_seller_router)
 app.include_router(shipment_router)
 app.include_router(shipment_ops_router)
 app.include_router(admin_auth_router)
+app.include_router(admin_audit_log_router)
 app.include_router(admin_order_router)
 app.include_router(admin_revenue_router)
 app.include_router(admin_category_router)

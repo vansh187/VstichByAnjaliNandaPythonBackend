@@ -16,6 +16,7 @@ from vstitchDTO.adminProductResponseDTO import (
     AdminProductVariantDTO,
     CreateProductsBatchResponseDTO,
 )
+from vstitchServices.adminAuditLogService import admin_audit_log_service
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminProductService import AdminProductService
 
@@ -92,7 +93,7 @@ class AdminProductApi:
         # response's errors[] - that's the whole point of the batch contract
         # (partial success, not all-or-nothing 4xx).
         try:
-            return self.admin_product_service.create_products_batch(
+            batch_result = self.admin_product_service.create_products_batch(
                 create_products_batch_request_dto, current_admin["admin_username"]
             )
         except Exception:
@@ -100,6 +101,15 @@ class AdminProductApi:
                 status_code=500,
                 detail="Something went wrong while creating the products. Please try again later.",
             )
+        for created_product in batch_result.created:
+            admin_audit_log_service.record(
+                current_admin["vstitch_admin_id"],
+                "create_product",
+                "product",
+                created_product.vstitch_product_id,
+                {"product_name": created_product.product_name},
+            )
+        return batch_result
 
     def update_product(
         self,
@@ -108,7 +118,7 @@ class AdminProductApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_product_service.update_product(
+            updated_product = self.admin_product_service.update_product(
                 vstitch_product_id, update_product_request_dto, current_admin["admin_username"]
             )
         except InvalidReferenceError as invalid_reference_error:
@@ -120,6 +130,14 @@ class AdminProductApi:
                 status_code=500,
                 detail="Something went wrong while updating the product. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "update_product",
+            "product",
+            vstitch_product_id,
+            update_product_request_dto.model_dump(exclude_unset=True),
+        )
+        return updated_product
 
     def delete_product(
         self,
@@ -135,6 +153,9 @@ class AdminProductApi:
                 status_code=500,
                 detail="Something went wrong while deleting the product. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"], "delete_product", "product", vstitch_product_id
+        )
 
     def add_variant(
         self,
@@ -143,7 +164,7 @@ class AdminProductApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_product_service.add_variant(
+            created_variant = self.admin_product_service.add_variant(
                 vstitch_product_id, create_variant_request_dto, current_admin["admin_username"]
             )
         except UniqueConstraintError as conflict_error:
@@ -157,6 +178,14 @@ class AdminProductApi:
                 status_code=500,
                 detail="Something went wrong while adding the variant. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "create_variant",
+            "product_variant",
+            created_variant.vstitch_product_variant_id,
+            {"vstitch_product_id": vstitch_product_id, "sku": created_variant.sku},
+        )
+        return created_variant
 
     def update_variant(
         self,
@@ -165,7 +194,7 @@ class AdminProductApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_product_service.update_variant(
+            updated_variant = self.admin_product_service.update_variant(
                 vstitch_product_variant_id, update_variant_request_dto, current_admin["admin_username"]
             )
         except UniqueConstraintError as conflict_error:
@@ -179,6 +208,14 @@ class AdminProductApi:
                 status_code=500,
                 detail="Something went wrong while updating the variant. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "update_variant",
+            "product_variant",
+            vstitch_product_variant_id,
+            update_variant_request_dto.model_dump(exclude_unset=True),
+        )
+        return updated_variant
 
     def delete_variant(
         self,
@@ -194,6 +231,9 @@ class AdminProductApi:
                 status_code=500,
                 detail="Something went wrong while deleting the variant. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"], "delete_variant", "product_variant", vstitch_product_variant_id
+        )
 
 
 admin_product_api = AdminProductApi()

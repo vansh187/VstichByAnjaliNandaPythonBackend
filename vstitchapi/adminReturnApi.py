@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from vstitchDTO.adminReturnRequestDTO import UpdateReturnStatusRequestDTO
 from vstitchDTO.adminReturnResponseDTO import AdminReturnListResponseDTO, AdminReturnResponseDTO
+from vstitchServices.adminAuditLogService import admin_audit_log_service
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminReturnService import AdminReturnService
 
@@ -48,7 +49,7 @@ class AdminReturnApi:
         current_admin: dict = Depends(get_current_admin),
     ):
         try:
-            return self.admin_return_service.update_return_status(
+            updated_return = self.admin_return_service.update_return_status(
                 vstitch_return_order_id, update_return_status_request_dto.status, current_admin["admin_username"]
             )
         except ValueError as validation_error:
@@ -58,6 +59,14 @@ class AdminReturnApi:
                 status_code=500,
                 detail="Something went wrong while updating the return status. Please try again later.",
             )
+        admin_audit_log_service.record(
+            current_admin["vstitch_admin_id"],
+            "update_return_status",
+            "return",
+            vstitch_return_order_id,
+            {"new_status": update_return_status_request_dto.status},
+        )
+        return updated_return
 
 
 admin_return_api = AdminReturnApi()
