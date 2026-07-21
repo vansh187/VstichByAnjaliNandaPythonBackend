@@ -1,9 +1,15 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from vstitchServices.rateLimiter import limiter
+from vstitchServices.securityHeadersMiddleware import SecurityHeadersMiddleware
 from vstitchapi.adminAuthApi import admin_auth_router
 from vstitchapi.adminCategoryApi import admin_category_router
 from vstitchapi.adminOrderApi import admin_order_router
@@ -44,13 +50,40 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Vstitch Backend", version="1.0.0", lifespan=lifespan)
 
+app.state.limiter = limiter
+
+
+def _rate_limit_exceeded_handler(request, exc):
+    # Same "generic message, no internals" convention as every other error
+    # path in this codebase, rather than slowapi's default {"error": ...}
+    # shape.
+    return JSONResponse(status_code=429, content={"detail": "Too many requests - please try again shortly."})
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Real frontend origin(s) aren't finalized yet - read from an env var
+# (comma-separated) rather than hardcoding, falling back to the common local
+# dev ports so local development isn't broken in the meantime. See
+# .env.example for the ALLOWED_ORIGINS format.
+_allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "").strip()
+allowed_origins = (
+    [origin.strip() for origin in _allowed_origins_env.split(",") if origin.strip()]
+    if _allowed_origins_env
+    else ["http://localhost:5173", "http://localhost:3000"]
+)
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(signup_router)
 app.include_router(login_router)
