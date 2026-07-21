@@ -37,11 +37,13 @@ class AdminJwtTokenService:
 
     def generate_access_token(self, vstitch_admin_id, admin_username):
         self._require_secret()
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=self.access_token_expire_minutes)
+        issued_at = datetime.now(timezone.utc)
+        expires_at = issued_at + timedelta(minutes=self.access_token_expire_minutes)
         token_payload = {
             "sub": str(vstitch_admin_id),
             "admin_username": admin_username,
             "role": "admin",
+            "iat": issued_at,
             "exp": expires_at,
         }
         return jwt.encode(token_payload, self.jwt_secret, algorithm=self.jwt_algorithm)

@@ -9,16 +9,23 @@
 -- successful login. No self-serve signup endpoint exists for this table -
 -- rows are created via a one-off provisioning script.
 
+-- TokenValidAfterUtc (see migrations/0008_add_admin_token_valid_after.sql):
+-- any JWT whose "iat" claim predates this timestamp is rejected even if its
+-- signature/expiry are still valid - the revocation mechanism behind
+-- POST /admin/logout-all, since a stateless JWT can't otherwise be killed
+-- early.
+
 CREATE TABLE IF NOT EXISTS VStitch_AdminUsers (
-    VstitchAdminId    BIGSERIAL     PRIMARY KEY,
-    AdminUsername     VARCHAR(250)  NOT NULL,
-    AdminPassword     VARCHAR(250)  NOT NULL,
-    Email             VARCHAR(250)  NOT NULL,
-    IsActive          BOOLEAN       NOT NULL DEFAULT TRUE,
-    created_by        VARCHAR(250)  NOT NULL,
-    created_date      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_by        VARCHAR(250),
-    updated_date      TIMESTAMP,
+    VstitchAdminId      BIGSERIAL     PRIMARY KEY,
+    AdminUsername       VARCHAR(250)  NOT NULL,
+    AdminPassword       VARCHAR(250)  NOT NULL,
+    Email               VARCHAR(250)  NOT NULL,
+    IsActive            BOOLEAN       NOT NULL DEFAULT TRUE,
+    TokenValidAfterUtc  TIMESTAMP,
+    created_by          VARCHAR(250)  NOT NULL,
+    created_date        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by          VARCHAR(250),
+    updated_date        TIMESTAMP,
 
     CONSTRAINT uq_admin_users_username UNIQUE (AdminUsername),
     CONSTRAINT uq_admin_users_email UNIQUE (Email)
