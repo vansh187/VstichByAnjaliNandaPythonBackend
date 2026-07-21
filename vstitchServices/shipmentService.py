@@ -487,8 +487,15 @@ class ShipmentService:
         """
         shiprocket_order_id = _coerce_bigint(_dig(payload, "order_id")) or _coerce_bigint(_dig(payload, "sr_order_id"))
         if not shiprocket_order_id:
+            # Logs the payload's top-level field names only, never the full
+            # payload - Shiprocket's webhook body carries customer PII
+            # (shipping address, phone) even on this "couldn't identify the
+            # order" path, and that's not something an application log
+            # should ever hold.
+            payload_keys = list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
             logger.info(
-                "Shiprocket tracking webhook had no numeric order_id/sr_order_id - ignoring. Payload: %s", payload
+                "Shiprocket tracking webhook had no numeric order_id/sr_order_id - ignoring. Payload fields: %s",
+                payload_keys,
             )
             return
 

@@ -149,7 +149,11 @@ class ShipmentApi:
         try:
             await run_in_threadpool(ShipmentService().handle_tracking_webhook, payload)
         except Exception:
-            logger.exception("Shiprocket tracking webhook processing failed. Payload: %s", payload)
+            # Logs the payload's top-level field names only, never the full
+            # payload - it carries customer PII (shipping address, phone)
+            # that has no reason to end up in application logs.
+            payload_keys = list(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
+            logger.exception("Shiprocket tracking webhook processing failed. Payload fields: %s", payload_keys)
         return {"status": "ok"}
 
 
