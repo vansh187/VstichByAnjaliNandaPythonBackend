@@ -118,7 +118,11 @@ class AdminOrderApi:
         )
         return updated_order
 
-    def sync_order_status(self, vstitch_order_id: int = Path(..., ge=1)):
+    def sync_order_status(
+        self,
+        vstitch_order_id: int = Path(..., ge=1),
+        current_admin: dict = Depends(get_current_admin),
+    ):
         """Manual 'refresh status' action: pulls the order's live status from
         Shiprocket and applies it if it's changed - the fallback for when the
         Shiprocket tracking webhook never fired for this order (see
@@ -133,8 +137,8 @@ class AdminOrderApi:
             # missing Shiprocket env var. Same reasoning as
             # shipmentRouterFactory.py's handlers, which all construct
             # ShipmentService() per call rather than once in a router class.
-            ShipmentService().sync_order_status_from_shiprocket(vstitch_order_id)
-            return self.admin_order_service.get_order(vstitch_order_id)
+            sync_result = ShipmentService().sync_order_status_from_shiprocket(vstitch_order_id)
+            updated_order = self.admin_order_service.get_order(vstitch_order_id)
         except ValueError as validation_error:
             raise HTTPException(status_code=409, detail=str(validation_error))
         except Exception:
@@ -142,6 +146,18 @@ class AdminOrderApi:
                 status_code=502,
                 detail="Something went wrong syncing the order status from Shiprocket. Please try again later.",
             )
+        # Only logged when the sync actually changed something - a no-op
+        # sync (status already matched Shiprocket) isn't an admin action
+        # worth cluttering the audit trail with.
+        if sync_result["updated"]:
+            admin_audit_log_service.record(
+                current_admin["vstitch_admin_id"],
+                "sync_order_status",
+                "order",
+                vstitch_order_id,
+                {"old_status": sync_result["old_status"], "new_status": sync_result["new_status"]},
+            )
+        return updated_order
 
 
 admin_order_api = AdminOrderApi()

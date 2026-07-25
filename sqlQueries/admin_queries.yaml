@@ -33,8 +33,17 @@ insert_admin: |
   RETURNING VstitchAdminId, AdminUsername, Email, created_date;
 
 revoke_all_sessions: |
+  -- TokenValidAfterUtc is truncated to whole seconds (date_trunc), not the
+  -- raw CURRENT_TIMESTAMP - a JWT's "iat" claim only has whole-second
+  -- resolution (see AdminJwtTokenService/jose's encoding), so comparing a
+  -- microsecond-precision revocation timestamp against a second-precision
+  -- iat let a token minted in the *same second* as this call have a
+  -- floored iat that lands before the revocation instant, even though it
+  -- was actually issued after it - self-locking the admin out of the
+  -- account they just logged back into. Flooring both sides to the same
+  -- second-level granularity removes that race.
   UPDATE VStitch_AdminUsers
-  SET TokenValidAfterUtc = CURRENT_TIMESTAMP,
+  SET TokenValidAfterUtc = date_trunc('second', CURRENT_TIMESTAMP),
       updated_by = %(updated_by)s,
       updated_date = CURRENT_TIMESTAMP
   WHERE VstitchAdminId = %(vstitch_admin_id)s
