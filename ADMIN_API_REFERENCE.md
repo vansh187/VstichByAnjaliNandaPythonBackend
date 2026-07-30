@@ -70,6 +70,61 @@ identical for both so a caller can't enumerate valid usernames)
 { "detail": "Invalid admin username or password." }
 ```
 
+**Rate limit**: 5 attempts/minute per IP. Exceeding it returns:
+```json
+// 429 Too Many Requests
+{ "detail": "Too many requests - please try again shortly." }
+```
+
+### `POST /admin/reset-password`
+
+No auth required (this is the "forgot password" flow - an admin who's
+locked out, by definition, can't send a bearer token). Requires **both**
+`admin_username` and the account's registered `email` to match the same
+row - knowing just a username isn't enough. On success, every existing
+access token for that admin is immediately invalidated (same effect as
+`POST /admin/logout-all`), so any device still logged in with the old
+password gets logged out too.
+
+**Request**
+```json
+{
+  "admin_username": "vansh_admin",
+  "email": "vansh@example.com",
+  "new_password": "NewAdminPass456!"
+}
+```
+- `admin_username`: 3-250 chars
+- `email`: must look like a valid email address (leading/trailing
+  whitespace on both fields is trimmed automatically before matching)
+- `new_password`: 8-250 chars, and must not exceed 72 bytes UTF-8 encoded
+  (only matters for passwords with heavy non-ASCII/emoji content)
+
+**Response `204`** - empty body. Password changed, all existing sessions
+for this admin revoked - the frontend should treat this like a fresh login
+is required (redirect to the login screen, don't try to reuse any
+previously stored token).
+
+**Response `404`** (username doesn't exist, email doesn't match, or the
+account is deactivated - deliberately the same generic message for all
+three so this can't be used to enumerate valid usernames/emails)
+```json
+{ "detail": "No matching admin account found for that username and email." }
+```
+
+**Response `422`** (validation failure - bad email format, password too
+short, etc.)
+```json
+{ "detail": [ { "loc": ["body", "new_password"], "msg": "String should have at least 8 characters", "type": "string_too_short" } ] }
+```
+
+**Rate limit**: 5 attempts/minute per IP, same as login and for the same
+reason (this is an unauthenticated username+email guessing surface).
+```json
+// 429 Too Many Requests
+{ "detail": "Too many requests - please try again shortly." }
+```
+
 ---
 
 ## Orders

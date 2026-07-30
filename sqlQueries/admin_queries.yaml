@@ -32,6 +32,24 @@ insert_admin: |
       (%s, %s, %s, %s, CURRENT_TIMESTAMP)
   RETURNING VstitchAdminId, AdminUsername, Email, created_date;
 
+reset_password: |
+  -- Matches on username AND email (case-insensitive on email, same as
+  -- signup's stored casing) so knowing a username alone isn't enough to
+  -- rewrite someone else's password. Also revokes every existing session
+  -- (same TokenValidAfterUtc mechanism as revoke_all_sessions) so a reset
+  -- password immediately invalidates any token issued before it - otherwise
+  -- an attacker who'd already stolen a valid token would keep working
+  -- straight through the reset.
+  UPDATE VStitch_AdminUsers
+  SET AdminPassword = %(new_password_hash)s,
+      TokenValidAfterUtc = date_trunc('second', CURRENT_TIMESTAMP),
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE AdminUsername = %(admin_username)s
+    AND LOWER(Email) = LOWER(%(email)s)
+    AND IsActive = TRUE
+  RETURNING VstitchAdminId;
+
 revoke_all_sessions: |
   -- TokenValidAfterUtc is truncated to whole seconds (date_trunc), not the
   -- raw CURRENT_TIMESTAMP - a JWT's "iat" claim only has whole-second

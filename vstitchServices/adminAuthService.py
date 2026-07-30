@@ -44,3 +44,24 @@ class AdminAuthService:
         """'Log out everywhere' - see AdminUserPersistence.revoke_all_sessions
         and adminAuthDependency.get_current_admin for how this is enforced."""
         self.admin_user_persistence.revoke_all_sessions(vstitch_admin_id, updated_by)
+
+    def reset_password(self, admin_reset_password_request_dto):
+        """No self-serve 'forgot password' email flow exists (see
+        scripts/create_admin_user.py's docstring on why there's no self-serve
+        admin signup either) - this requires knowing both the admin's
+        username AND their registered email, which keeps a bare username
+        guess from being enough to hijack the account. Same generic error
+        either way (unknown username, wrong email, or inactive account) so
+        the response doesn't reveal which part was wrong.
+        """
+        new_password_hash = self.password_hash_service.hash_password(
+            admin_reset_password_request_dto.new_password
+        )
+        was_reset = self.admin_user_persistence.reset_password(
+            admin_reset_password_request_dto.admin_username,
+            admin_reset_password_request_dto.email,
+            new_password_hash,
+            f"admin-self-service-reset:{admin_reset_password_request_dto.admin_username}",
+        )
+        if not was_reset:
+            raise ValueError("No matching admin account found for that username and email.")
