@@ -2,17 +2,19 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from vstitchDTO.adminLoginRequestDTO import AdminLoginRequestDTO
 from vstitchDTO.adminLoginResponseDTO import AdminLoginResponseDTO
+from vstitchDTO.adminResetPasswordRequestDTO import AdminResetPasswordRequestDTO
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.adminAuthService import AdminAuthService
 from vstitchServices.rateLimiter import limiter
 
 
 class AdminAuthApi:
-    """Exposes /admin/login and /admin/logout-all. Login is deliberately its
-    own router with no Depends(get_current_admin) - a caller can't present
-    an admin bearer token they don't have yet, so this is the one admin
-    endpoint that must stay open (now rate-limited below instead of
-    unprotected).
+    """Exposes /admin/login, /admin/reset-password, and /admin/logout-all.
+    Login and reset-password are deliberately on their own router with no
+    Depends(get_current_admin) - a caller can't present an admin bearer
+    token they don't have yet (that's the whole point of a password reset),
+    so these are the two admin endpoints that must stay open (rate-limited
+    below instead of unprotected).
     """
 
     def __init__(self):
@@ -23,6 +25,12 @@ class AdminAuthApi:
             self._build_login_route(),
             methods=["POST"],
             response_model=AdminLoginResponseDTO,
+        )
+        self.router.add_api_route(
+            "/admin/reset-password",
+            self._build_reset_password_route(),
+            methods=["POST"],
+            status_code=204,
         )
         self.router.add_api_route(
             "/admin/logout-all",
@@ -53,6 +61,26 @@ class AdminAuthApi:
                 )
 
         return login
+
+    def _build_reset_password_route(self):
+        admin_auth_service = self.admin_auth_service
+
+        # Same 5/minute rate limit as login - this endpoint is an
+        # unauthenticated username+email guessing surface otherwise, exactly
+        # like login is an unauthenticated password guessing surface.
+        @limiter.limit("5/minute")
+        def reset_password(admin_reset_password_request_dto: AdminResetPasswordRequestDTO, request: Request):
+            try:
+                admin_auth_service.reset_password(admin_reset_password_request_dto)
+            except ValueError as reset_error:
+                raise HTTPException(status_code=404, detail=str(reset_error))
+            except Exception:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Something went wrong while resetting the password. Please try again later.",
+                )
+
+        return reset_password
 
     def logout_all(self, current_admin: dict = Depends(get_current_admin)):
         """Self-service 'log out everywhere' - revokes every access token
