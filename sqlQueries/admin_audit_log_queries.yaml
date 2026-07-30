@@ -1,0 +1,31 @@
+create_table: |
+  CREATE TABLE IF NOT EXISTS VStitch_AdminAuditLog (
+      VstitchAdminAuditLogId  BIGSERIAL     PRIMARY KEY,
+      VstitchAdminId          BIGINT        NOT NULL REFERENCES VStitch_AdminUsers(VstitchAdminId),
+      ActionType              VARCHAR(100)  NOT NULL,
+      ResourceType            VARCHAR(100)  NOT NULL,
+      ResourceId              BIGINT,
+      Details                 JSONB,
+      created_date            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_admin_audit_log_admin_id ON VStitch_AdminAuditLog (VstitchAdminId);
+  CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_date ON VStitch_AdminAuditLog (created_date);
+
+insert_audit_log_entry: |
+  INSERT INTO VStitch_AdminAuditLog
+      (VstitchAdminId, ActionType, ResourceType, ResourceId, Details, created_date)
+  VALUES
+      (%(vstitch_admin_id)s, %(action_type)s, %(resource_type)s, %(resource_id)s, %(details)s, CURRENT_TIMESTAMP)
+  RETURNING VstitchAdminAuditLogId;
+
+list_audit_log_entries: |
+  SELECT log.VstitchAdminAuditLogId, log.VstitchAdminId, admin.AdminUsername, log.ActionType,
+         log.ResourceType, log.ResourceId, log.Details, log.created_date
+  FROM VStitch_AdminAuditLog log
+  JOIN VStitch_AdminUsers admin ON admin.VstitchAdminId = log.VstitchAdminId
+  WHERE (%(admin_id)s::BIGINT IS NULL OR log.VstitchAdminId = %(admin_id)s)
+    AND (%(action_type)s::TEXT IS NULL OR log.ActionType = %(action_type)s)
+    AND (%(after_id)s::BIGINT IS NULL OR log.VstitchAdminAuditLogId < %(after_id)s)
+  ORDER BY log.VstitchAdminAuditLogId DESC
+  LIMIT %(limit_plus_one)s;

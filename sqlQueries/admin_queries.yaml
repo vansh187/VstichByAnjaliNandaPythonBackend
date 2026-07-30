@@ -1,0 +1,50 @@
+create_admin_users_table: |
+  CREATE TABLE IF NOT EXISTS VStitch_AdminUsers (
+      VstitchAdminId      BIGSERIAL     PRIMARY KEY,
+      AdminUsername       VARCHAR(250)  NOT NULL,
+      AdminPassword       VARCHAR(250)  NOT NULL,
+      Email               VARCHAR(250)  NOT NULL,
+      IsActive            BOOLEAN       NOT NULL DEFAULT TRUE,
+      TokenValidAfterUtc  TIMESTAMP,
+      created_by          VARCHAR(250)  NOT NULL,
+      created_date        TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by          VARCHAR(250),
+      updated_date        TIMESTAMP,
+
+      CONSTRAINT uq_admin_users_username UNIQUE (AdminUsername),
+      CONSTRAINT uq_admin_users_email UNIQUE (Email)
+  );
+
+get_admin_by_username: |
+  SELECT VstitchAdminId, AdminUsername, AdminPassword, Email, IsActive
+  FROM VStitch_AdminUsers
+  WHERE AdminUsername = %s;
+
+get_admin_by_id: |
+  SELECT VstitchAdminId, AdminUsername, Email, IsActive, TokenValidAfterUtc
+  FROM VStitch_AdminUsers
+  WHERE VstitchAdminId = %s;
+
+insert_admin: |
+  INSERT INTO VStitch_AdminUsers
+      (AdminUsername, AdminPassword, Email, created_by, created_date)
+  VALUES
+      (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+  RETURNING VstitchAdminId, AdminUsername, Email, created_date;
+
+revoke_all_sessions: |
+  -- TokenValidAfterUtc is truncated to whole seconds (date_trunc), not the
+  -- raw CURRENT_TIMESTAMP - a JWT's "iat" claim only has whole-second
+  -- resolution (see AdminJwtTokenService/jose's encoding), so comparing a
+  -- microsecond-precision revocation timestamp against a second-precision
+  -- iat let a token minted in the *same second* as this call have a
+  -- floored iat that lands before the revocation instant, even though it
+  -- was actually issued after it - self-locking the admin out of the
+  -- account they just logged back into. Flooring both sides to the same
+  -- second-level granularity removes that race.
+  UPDATE VStitch_AdminUsers
+  SET TokenValidAfterUtc = date_trunc('second', CURRENT_TIMESTAMP),
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchAdminId = %(vstitch_admin_id)s
+  RETURNING VstitchAdminId;

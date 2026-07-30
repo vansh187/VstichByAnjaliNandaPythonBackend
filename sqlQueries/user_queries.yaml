@@ -2,11 +2,13 @@ create_table: |
   CREATE TABLE IF NOT EXISTS VStitch_Users (
       VstitchUserId    BIGSERIAL     PRIMARY KEY,
       VstitchUserName  VARCHAR(250)  NOT NULL,
-      VstitchPassword  VARCHAR(250)  NOT NULL,
+      VstitchPassword  VARCHAR(250),
       FirstName        VARCHAR(250)  NOT NULL,
       LastName         VARCHAR(250)  NOT NULL,
       Email            VARCHAR(250)  NOT NULL,
-      PhoneNumber      VARCHAR(250)  NOT NULL,
+      PhoneNumber      VARCHAR(250),
+      GoogleId         VARCHAR(250),
+      AuthProvider     VARCHAR(20)   NOT NULL DEFAULT 'local',
       created_by       VARCHAR(250)  NOT NULL,
       created_date     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_by       VARCHAR(250),
@@ -14,7 +16,8 @@ create_table: |
 
       CONSTRAINT uq_vstitch_users_username UNIQUE (VstitchUserName),
       CONSTRAINT uq_vstitch_users_email UNIQUE (Email),
-      CONSTRAINT uq_vstitch_users_phone UNIQUE (PhoneNumber)
+      CONSTRAINT uq_vstitch_users_phone UNIQUE (PhoneNumber),
+      CONSTRAINT uq_vstitch_users_google_id UNIQUE (GoogleId)
   );
 
 check_username_exists: |
@@ -28,12 +31,38 @@ check_phone_exists: |
 
 insert_user: |
   INSERT INTO VStitch_Users
-      (VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber, created_by, created_date)
+      (VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber, AuthProvider, created_by, created_date)
   VALUES
-      (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+      (%s, %s, %s, %s, %s, %s, 'local', %s, CURRENT_TIMESTAMP)
   RETURNING VstitchUserId, VstitchUserName, Email, created_date;
 
 get_user_by_username: |
   SELECT VstitchUserId, VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber
   FROM VStitch_Users
   WHERE VstitchUserName = %s;
+
+get_user_by_google_id: |
+  SELECT VstitchUserId, VstitchUserName, FirstName, LastName, Email, GoogleId, AuthProvider
+  FROM VStitch_Users
+  WHERE GoogleId = %s;
+
+get_user_by_email: |
+  SELECT VstitchUserId, VstitchUserName, FirstName, LastName, Email, GoogleId, AuthProvider
+  FROM VStitch_Users
+  WHERE Email = %s;
+
+insert_google_user: |
+  INSERT INTO VStitch_Users
+      (VstitchUserName, FirstName, LastName, Email, GoogleId, AuthProvider, created_by, created_date)
+  VALUES
+      (%s, %s, %s, %s, %s, 'google', %s, CURRENT_TIMESTAMP)
+  RETURNING VstitchUserId, VstitchUserName, Email;
+
+link_google_id_to_user: |
+  UPDATE VStitch_Users
+  SET GoogleId = %(google_id)s,
+      AuthProvider = 'google',
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchUserId = %(vstitch_user_id)s
+  RETURNING VstitchUserId, VstitchUserName, Email;

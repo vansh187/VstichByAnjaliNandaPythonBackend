@@ -1,0 +1,42 @@
+check_product_exists: |
+  SELECT VstitchProductId FROM VStitch_Products WHERE VstitchProductId = %s AND IsActive = TRUE;
+
+upsert_review: |
+  -- One review per (user, product) - see uq_reviews_user_product. A second
+  -- submission from the same user updates their existing review in place
+  -- rather than erroring, so the frontend can use one call for both
+  -- "write a review" and "edit my review". Atomic via ON CONFLICT rather
+  -- than a separate check-then-insert-or-update, so two rapid submissions
+  -- from the same user can't race into a UniqueViolation.
+  -- (xmax = 0) is the standard Postgres idiom for "was this row just
+  -- inserted, not updated" - lets the caller return 201 vs 200 without a
+  -- second round trip.
+  INSERT INTO VStitch_Reviews
+      (VstitchUserId, VstitchProductId, Rating, ReviewText, created_by, created_date)
+  VALUES
+      (%(vstitch_user_id)s, %(vstitch_product_id)s, %(rating)s, %(review_text)s, %(actor)s, CURRENT_TIMESTAMP)
+  ON CONFLICT ON CONSTRAINT uq_reviews_user_product
+  DO UPDATE SET
+      Rating = EXCLUDED.Rating,
+      ReviewText = EXCLUDED.ReviewText,
+      updated_by = EXCLUDED.created_by,
+      updated_date = CURRENT_TIMESTAMP
+  RETURNING VstitchReviewId, VstitchProductId, Rating, ReviewText, created_date, updated_date, (xmax = 0) AS was_inserted;
+
+get_review_stats_for_product: |
+  SELECT ROUND(AVG(Rating)::numeric, 1) AS average_rating, COUNT(*) AS review_count
+  FROM VStitch_Reviews
+  WHERE VstitchProductId = %s;
+
+list_reviews_for_product: |
+  -- Newest-first, keyset-paginated on VstitchReviewId (a sequential id is
+  -- equivalent to created_date DESC here, and avoids duplicate-timestamp
+  -- cursor edge cases) - same convention as every other list query in this
+  -- codebase (see get_orders_for_user's before_id).
+  SELECT r.VstitchReviewId, u.VstitchUserName AS ReviewerName, r.Rating, r.ReviewText, r.created_date
+  FROM VStitch_Reviews r
+  JOIN VStitch_Users u ON u.VstitchUserId = r.VstitchUserId
+  WHERE r.VstitchProductId = %(vstitch_product_id)s
+    AND (%(before_id)s::BIGINT IS NULL OR r.VstitchReviewId < %(before_id)s)
+  ORDER BY r.VstitchReviewId DESC
+  LIMIT %(limit_plus_one)s;

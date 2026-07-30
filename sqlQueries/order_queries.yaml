@@ -49,8 +49,141 @@ get_orders_for_user: |
   ORDER BY VstitchOrderId DESC
   LIMIT %(limit_plus_one)s;
 
+# --- Admin: cross-customer order management -----------------------------
+
+list_orders_for_admin: |
+  -- Newest-first, keyset-paginated on VstitchOrderId like every other list
+  -- query in this file - the after_id parameter here means "continue
+  -- paging from just after this cursor", i.e. strictly less than it in
+  -- this DESC order, matching get_orders_for_user's before_id parameter
+  -- under a name that matches the admin API contract.
+  SELECT o.VstitchOrderId, o.VstitchUserId, (u.FirstName || ' ' || u.LastName) AS CustomerName, u.Email AS CustomerEmail,
+         o.OrderStatus, o.PaymentMethod, o.TotalAmount,
+         o.ShippingRecipientName, o.ShippingAddressLine1, o.ShippingAddressLine2,
+         o.ShippingCity, o.ShippingState, o.ShippingPostalCode, o.ShippingCountry, o.ShippingPhoneNumber,
+         o.AwbCode, o.CourierName, o.created_date
+  FROM VStitch_Orders o
+  JOIN VStitch_Users u ON u.VstitchUserId = o.VstitchUserId
+  WHERE (%(status)s::VARCHAR IS NULL OR o.OrderStatus = %(status)s)
+    AND (%(payment_method)s::VARCHAR IS NULL OR o.PaymentMethod = %(payment_method)s)
+    AND (
+      %(search)s::VARCHAR IS NULL
+      OR o.VstitchOrderId::TEXT = %(search)s
+      OR u.Email ILIKE '%%' || %(search)s || '%%'
+      OR (u.FirstName || ' ' || u.LastName) ILIKE '%%' || %(search)s || '%%'
+    )
+    AND (%(after_id)s::BIGINT IS NULL OR o.VstitchOrderId < %(after_id)s)
+  ORDER BY o.VstitchOrderId DESC
+  LIMIT %(limit_plus_one)s;
+
+get_order_for_admin: |
+  SELECT o.VstitchOrderId, o.VstitchUserId, (u.FirstName || ' ' || u.LastName) AS CustomerName, u.Email AS CustomerEmail,
+         o.OrderStatus, o.PaymentMethod, o.TotalAmount,
+         o.ShippingRecipientName, o.ShippingAddressLine1, o.ShippingAddressLine2,
+         o.ShippingCity, o.ShippingState, o.ShippingPostalCode, o.ShippingCountry, o.ShippingPhoneNumber,
+         o.AwbCode, o.CourierName, o.created_date
+  FROM VStitch_Orders o
+  JOIN VStitch_Users u ON u.VstitchUserId = o.VstitchUserId
+  WHERE o.VstitchOrderId = %s;
+
+update_order_status_admin: |
+  -- Deliberately ungated on the old status (unlike update_order_status_guarded) -
+  -- this is an intentional admin override, not a forward-pipeline transition,
+  -- so any valid OrderStatus is accepted from any prior status. Still uses
+  -- RETURNING to distinguish "order not found" from "updated".
+  UPDATE VStitch_Orders
+  SET OrderStatus = %(new_status)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchOrderId = %(vstitch_order_id)s
+  RETURNING VstitchOrderId;
+
+# --- Admin: revenue dashboard --------------------------------------------
+
+# "Revenue" predicate, reused by revenue_for_period and revenue_daily: a COD
+# order counts once placed (cash is only ever collected at delivery, so
+# there's no separate "captured" step to wait on - see orderStatus.py),
+# excluding cancelled. A Razorpay order only counts once its OrderStatus is
+# past payment_pending/payment_failed - mark_payment_captured keeps
+# OrderStatus in lockstep with the payment transaction atomically, so
+# checking OrderStatus alone is sufficient here without a join to
+# VStitch_PaymentTransactions.
+revenue_for_period: |
+  SELECT COALESCE(SUM(TotalAmount), 0) AS Revenue, COUNT(*) AS OrdersCount
+  FROM VStitch_Orders
+  WHERE (
+      (PaymentMethod = 'cod' AND OrderStatus <> 'cancelled')
+      OR (PaymentMethod = 'razorpay' AND OrderStatus NOT IN ('payment_pending', 'payment_failed', 'cancelled'))
+    )
+    AND (%(from_date)s::DATE IS NULL OR created_date::DATE >= %(from_date)s)
+    AND (%(to_date)s::DATE IS NULL OR created_date::DATE <= %(to_date)s);
+
+revenue_daily: |
+  SELECT created_date::DATE AS Day, COALESCE(SUM(TotalAmount), 0) AS Revenue, COUNT(*) AS OrdersCount
+  FROM VStitch_Orders
+  WHERE (
+      (PaymentMethod = 'cod' AND OrderStatus <> 'cancelled')
+      OR (PaymentMethod = 'razorpay' AND OrderStatus NOT IN ('payment_pending', 'payment_failed', 'cancelled'))
+    )
+    AND (%(from_date)s::DATE IS NULL OR created_date::DATE >= %(from_date)s)
+    AND (%(to_date)s::DATE IS NULL OR created_date::DATE <= %(to_date)s)
+  GROUP BY created_date::DATE
+  ORDER BY created_date::DATE;
+
+pending_orders_count: |
+  SELECT COUNT(*) FROM VStitch_Orders WHERE OrderStatus IN ('placed', 'confirmed', 'processing');
+
+pending_shipments_count: |
+  -- A shipment exists at Shiprocket but no courier/AWB has been assigned
+  -- yet - the exact gap between create_shipment_for_order succeeding and
+  -- assign_awb_for_order succeeding (see shipmentService.py).
+  SELECT COUNT(*) FROM VStitch_Orders WHERE ShiprocketShipmentId IS NOT NULL AND AwbCode IS NULL;
+
+# --- Admin: returns --------------------------------------------------------
+
+list_returns_for_admin: |
+  SELECT ro.VstitchReturnOrderId, ro.VstitchOrderId, (u.FirstName || ' ' || u.LastName) AS CustomerName,
+         u.Email AS CustomerEmail, ro.Reason, ro.Status, ro.ShiprocketReturnOrderId, ro.ShiprocketShipmentId,
+         ro.created_date
+  FROM VStitch_ReturnOrders ro
+  JOIN VStitch_Orders o ON o.VstitchOrderId = ro.VstitchOrderId
+  JOIN VStitch_Users u ON u.VstitchUserId = o.VstitchUserId
+  WHERE (%(status)s::VARCHAR IS NULL OR ro.Status = %(status)s)
+    AND (%(after_id)s::BIGINT IS NULL OR ro.VstitchReturnOrderId < %(after_id)s)
+  ORDER BY ro.VstitchReturnOrderId DESC
+  LIMIT %(limit_plus_one)s;
+
+update_return_status_admin: |
+  -- Free-form, like update_order_status_admin - an admin approving/
+  -- rejecting/completing a return is itself the authority on the
+  -- transition, not a forward-pipeline check. UPDATE ... FROM ... RETURNING
+  -- joins the customer context back in the same statement, so the caller
+  -- gets the full updated row (same shape as list_returns_for_admin)
+  -- without a second round trip.
+  UPDATE VStitch_ReturnOrders ro
+  SET Status = %(new_status)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  FROM VStitch_Orders o
+  JOIN VStitch_Users u ON u.VstitchUserId = o.VstitchUserId
+  WHERE ro.VstitchReturnOrderId = %(vstitch_return_order_id)s
+    AND o.VstitchOrderId = ro.VstitchOrderId
+  RETURNING ro.VstitchReturnOrderId, ro.VstitchOrderId, (u.FirstName || ' ' || u.LastName) AS CustomerName,
+            u.Email AS CustomerEmail, ro.Reason, ro.Status, ro.ShiprocketReturnOrderId, ro.ShiprocketShipmentId,
+            ro.created_date;
+
 get_order_items_for_orders: |
   SELECT VstitchOrderId, VstitchProductVariantId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,
+         UnitPriceSnapshot, Quantity
+  FROM VStitch_OrderItems
+  WHERE VstitchOrderId = ANY(%s)
+  ORDER BY VstitchOrderId, VstitchOrderItemId;
+
+get_order_items_for_orders_admin: |
+  -- Same table as get_order_items_for_orders but includes VstitchOrderItemId -
+  -- the admin API contract's item shape carries it (a stable per-line id for
+  -- the admin UI to key rows on), which the customer-facing shape doesn't need.
+  SELECT VstitchOrderId, VstitchOrderItemId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,
          UnitPriceSnapshot, Quantity
   FROM VStitch_OrderItems
   WHERE VstitchOrderId = ANY(%s)

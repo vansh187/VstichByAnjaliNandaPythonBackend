@@ -26,6 +26,15 @@ class ConnectionFactory:
         self.database_url = os.getenv("DATABASE_URL")
         if not self.database_url:
             raise ValueError("DATABASE_URL is not configured in the environment.")
+        # Defense-in-depth: Supabase's pooler already defaults to TLS, but
+        # this stops a misconfigured/copy-pasted connection string (e.g. one
+        # missing sslmode entirely, or pointing at a different host) from
+        # silently connecting over plaintext instead. Only appended if the
+        # string doesn't already specify a mode - never overrides an
+        # explicit, intentional choice already in DATABASE_URL.
+        if "sslmode=" not in self.database_url:
+            separator = "&" if "?" in self.database_url else "?"
+            self.database_url = f"{self.database_url}{separator}sslmode=require"
         # minconn == maxconn: ThreadedConnectionPool eagerly opens `minconn`
         # connections in this constructor and only opens the rest lazily, on
         # first demand, under the pool's single internal lock. Establishing a
