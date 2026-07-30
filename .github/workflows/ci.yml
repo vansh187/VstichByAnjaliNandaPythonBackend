@@ -36,6 +36,14 @@ jobs:
       JWT_ALGORITHM: HS256
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "60"
       RUN_API_INTEGRATION_TESTS: "1"
+      # These four are only read eagerly by module-level client singletons
+      # (GoogleAuthApi, RazorpayClient) during `import main` - no test in
+      # this suite calls the real Google/Razorpay APIs, so placeholder
+      # values are enough to satisfy the __init__ checks.
+      GOOGLE_CLIENT_ID: ci-placeholder-google-client-id
+      RAZORPAY_API_KEY: ci-placeholder-razorpay-key
+      RAZORPAY_SECRET_KEY: ci-placeholder-razorpay-secret
+      RAZORPAY_WEBHOOK_SECRET: ci-placeholder-razorpay-webhook-secret
 
     steps:
       - name: Check out code
