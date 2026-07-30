@@ -26,7 +26,12 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgresql://vstitch_ci:vstitch_ci_password@localhost:5432/vstitch_ci
+      # The postgres service container below is a stock image with SSL off -
+      # ConnectionFactory forces sslmode=require onto any URL that doesn't
+      # already specify one, so this must be explicit or `import main` fails
+      # before any test runs. Prod (Supabase) already enforces TLS on its
+      # pooler regardless of this setting.
+      DATABASE_URL: postgresql://vstitch_ci:vstitch_ci_password@localhost:5432/vstitch_ci?sslmode=disable
       JWT_SECRET: ci-test-secret-not-for-production
       JWT_ALGORITHM: HS256
       JWT_ACCESS_TOKEN_EXPIRE_MINUTES: "60"
