@@ -19,8 +19,23 @@ def test_generate_and_decode_roundtrip(jwt_token_service):
 
 
 def test_decode_rejects_tampered_token(jwt_token_service):
+    # Tamper a character in the *payload* segment, not the last character of
+    # the whole token: the signature is HMAC'd over the literal
+    # "header_b64.payload_b64" string, so any change there always produces a
+    # different string and therefore always fails verification. The final
+    # base64 group of the *signature* segment has spare/padding bits (32
+    # HMAC-SHA256 bytes don't divide evenly into base64 sextets), so some
+    # substitutions of the token's very last character decode to the exact
+    # same signature bytes despite being a different character - that made
+    # this test flaky (only ~1 in a few runs) rather than a real bug in
+    # verification.
     token = jwt_token_service.generate_access_token(vstitch_user_id=1, vstitch_user_name="someone")
-    tampered_token = token[:-1] + ("A" if token[-1] != "A" else "B")
+    header_b64, payload_b64, signature_b64 = token.split(".")
+    middle_index = len(payload_b64) // 2
+    original_char = payload_b64[middle_index]
+    replacement_char = "A" if original_char != "A" else "B"
+    tampered_payload_b64 = payload_b64[:middle_index] + replacement_char + payload_b64[middle_index + 1 :]
+    tampered_token = f"{header_b64}.{tampered_payload_b64}.{signature_b64}"
     with pytest.raises(ValueError):
         jwt_token_service.decode_access_token(tampered_token)
 
