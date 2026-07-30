@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from main import app
+from vstitchServices.rateLimiter import limiter
 
 # These tests exercise the real /signup and /login HTTP surface against a
 # real Postgres database (schema creation runs via the app's startup event).
@@ -18,6 +19,20 @@ pytestmark = [
         reason="Set RUN_API_INTEGRATION_TESTS=1 to run integration tests against a real Postgres database.",
     ),
 ]
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    # `limiter` is a single in-memory-storage instance shared by every
+    # request the app handles (see rateLimiter.py), and TestClient always
+    # presents the same fake client IP - so without this, /signup's
+    # 3/minute and /login's 5/minute limits accumulate *across* test
+    # functions in this same pytest process, and a later test can get a 429
+    # for a request that has nothing to do with rate limiting (e.g.
+    # test_duplicate_signup_returns_409's second /signup call starts
+    # failing once enough earlier tests in the file have already called
+    # /signup or /login).
+    limiter.reset()
 
 
 @pytest.fixture
