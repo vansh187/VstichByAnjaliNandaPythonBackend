@@ -307,6 +307,57 @@ revenue in range.
 
 ---
 
+## Images
+
+### `POST /admin/images/upload`
+
+Uploads one image file and returns its public URL. This is the only
+change to the image workflow - `POST /admin/products` and
+`POST /admin/categories` are unchanged and still take `image_url` as a
+plain string; call this endpoint first, then send the `image_url` it
+returns in either of those existing payloads.
+
+**Request** - `multipart/form-data`
+
+| Field | Type | Notes |
+|---|---|---|
+| `file` | binary | the image file |
+| `image_type` | string | `"category"` or `"product"` |
+
+Category images: one per category (single upload slot, feeds the
+existing `image_url` field on `POST /admin/categories`).
+Product images: multiple per product (repeatable upload slots, each
+feeding one entry of the existing `images: [{ image_url, is_primary,
+display_order }]` array on `POST /admin/products`).
+
+Accepted file types: JPG, PNG, WEBP. Max size: 5 MB. The uploaded image
+is converted to WebP and downsized server-side before storage - the
+returned URL always ends in `.webp` regardless of the uploaded format.
+
+**Response `200`**
+```json
+{ "image_url": "https://storage.example.com/products/a1b2c3d4.webp" }
+```
+
+**Response `422`** (missing/invalid `image_type`, unsupported file type,
+file too large, or unreadable image data)
+```json
+{ "detail": "image_type must be 'category' or 'product'." }
+```
+```json
+{ "detail": "Only JPG, PNG, or WEBP images are allowed." }
+```
+```json
+{ "detail": "Image must be smaller than 5MB." }
+```
+
+**Response `401`** - same shape as every other admin endpoint.
+
+**Response `500`** - generic safe-to-display message, storage-backend
+failure.
+
+---
+
 ## Categories
 
 ### `GET /admin/categories`
