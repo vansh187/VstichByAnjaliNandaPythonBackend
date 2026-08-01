@@ -53,6 +53,20 @@ class RazorpayClient:
             timeout=RAZORPAY_REQUEST_TIMEOUT_SECONDS,
         )
 
+    def refund_payment(self, razorpay_payment_id, amount_in_paise, notes=None):
+        """Issues a refund against an already-captured payment. Same
+        contract as create_order: bounded by a short timeout, raises on
+        failure (razorpay.errors.* or a requests exception) rather than
+        returning a partial/error response for the caller to inspect - the
+        caller (PaymentService.refund_order_payment) only persists a
+        refund_pending state once this has already succeeded.
+        """
+        return self.client.payment.refund(
+            razorpay_payment_id,
+            amount_in_paise,
+            {"notes": notes or {}},
+        )
+
     def verify_webhook_signature(self, raw_body, signature):
         """Returns True only if `signature` (the X-Razorpay-Signature header) is
         a valid HMAC-SHA256 of `raw_body` keyed by the webhook secret. Never

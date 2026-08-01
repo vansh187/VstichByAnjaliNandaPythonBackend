@@ -99,6 +99,101 @@ class PaymentPersistence:
             connection.commit()
             return vstitch_order_id if order_row is not None else None
 
+    def find_captured_transaction_by_order_id(self, vstitch_order_id):
+        """Looks up the captured payment transaction to refund for a return/
+        replace that just reached 'completed'. Returns None if there is no
+        'captured' transaction for this order (COD order, not yet captured,
+        or already refunded/refund-in-flight) - the refund trigger's own
+        "nothing to refund" signal."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("find_captured_transaction_by_order_id"),
+                    (vstitch_order_id,),
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            column_names = (
+                "vstitch_payment_transaction_id",
+                "vstitch_order_id",
+                "razorpay_payment_id",
+                "payment_status",
+                "amount",
+                "currency",
+            )
+            return dict(zip(column_names, row))
+
+    def mark_payment_refund_pending(self, razorpay_payment_id, updated_by):
+        """Atomically claims the transaction for refunding (guarded
+        captured -> refund_pending), called BEFORE the Razorpay refund API
+        call - this is what actually prevents two concurrent refund
+        triggers from both calling Razorpay, not a check beforehand.
+        Returns the affected VstitchOrderId, or None if nothing matched (the
+        transaction was no longer 'captured' - already refunded, or a
+        concurrent trigger already claimed it)."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("mark_payment_refund_pending"),
+                    {"updated_by": updated_by, "razorpay_payment_id": razorpay_payment_id},
+                )
+                row = cursor.fetchone()
+            connection.commit()
+            return row[1] if row is not None else None
+
+    def set_razorpay_refund_id(self, razorpay_payment_id, razorpay_refund_id):
+        """Fills in Razorpay's own refund id once the refund request
+        actually succeeds at the gateway - the claim (mark_payment_refund_
+        pending) happens first, before that id exists."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("set_razorpay_refund_id"),
+                    {"razorpay_refund_id": razorpay_refund_id, "razorpay_payment_id": razorpay_payment_id},
+                )
+            connection.commit()
+
+    def mark_payment_refunded(self, razorpay_payment_id, refunded_amount, updated_by):
+        """Guarded refund_pending -> refunded transition, applied once
+        Razorpay's refund.processed webhook confirms the refund actually
+        completed. Returns the affected VstitchOrderId, or None if nothing
+        matched (already reconciled, or an out-of-order/duplicate webhook
+        delivery)."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("mark_payment_refunded"),
+                    {
+                        "refunded_amount": refunded_amount,
+                        "updated_by": updated_by,
+                        "razorpay_payment_id": razorpay_payment_id,
+                    },
+                )
+                row = cursor.fetchone()
+            connection.commit()
+            return row[1] if row is not None else None
+
+    def mark_payment_refund_failed(self, razorpay_payment_id, failure_reason, updated_by):
+        """Guarded refund_pending -> captured revert, applied on Razorpay's
+        refund.failed webhook - reverting to 'captured' (rather than a
+        dead-end status) is what makes the refund retryable the next time
+        the return is re-completed. Returns the affected VstitchOrderId, or
+        None if nothing matched."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("mark_payment_refund_failed"),
+                    {
+                        "failure_reason": failure_reason,
+                        "updated_by": updated_by,
+                        "razorpay_payment_id": razorpay_payment_id,
+                    },
+                )
+                row = cursor.fetchone()
+            connection.commit()
+            return row[1] if row is not None else None
+
     def mark_payment_failed(self, razorpay_order_id, razorpay_payment_id, failure_reason, updated_by):
         """Moves a transaction created/authorized -> failed, its order
         payment_pending -> payment_failed, and restocks the variants that were

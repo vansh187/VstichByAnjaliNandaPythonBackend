@@ -31,11 +31,12 @@ class AdminReturnApi:
     def list_returns(
         self,
         status: Optional[str] = Query(default=None),
+        request_type: Optional[str] = Query(default=None),
         after_id: Optional[int] = Query(default=None, ge=1),
         limit: int = Query(default=20, ge=1, le=100),
     ):
         try:
-            return self.admin_return_service.list_returns(status, after_id, limit)
+            return self.admin_return_service.list_returns(status, request_type, after_id, limit)
         except Exception:
             raise HTTPException(
                 status_code=500,

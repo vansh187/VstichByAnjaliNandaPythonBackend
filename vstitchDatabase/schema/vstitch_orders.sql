@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS VStitch_Orders (
     ShiprocketShipmentId   BIGINT,
     AwbCode                VARCHAR(100),
     CourierName            VARCHAR(250),
+    -- Stamped exactly once, the first time OrderStatus transitions to
+    -- 'delivered' - see migrations/0010_add_delivered_date_and_replace_requests.sql.
+    -- Return/replace eligibility (7 days since delivery) is computed from
+    -- this, not updated_date, since updated_date gets overwritten by any
+    -- later status transition.
+    DeliveredDate          TIMESTAMP,
     created_by             VARCHAR(250)  NOT NULL,
     created_date           TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by             VARCHAR(250),

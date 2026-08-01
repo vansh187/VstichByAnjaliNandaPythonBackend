@@ -1,8 +1,34 @@
-from pydantic import BaseModel, Field
+from typing import List
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class CreateReturnRequestDTO(BaseModel):
     reason: str = Field(..., min_length=1, max_length=500)
+
+
+# VStitch_ReturnOrderItems.IssueCategory CHECK-constraint values
+# (vstitch_return_order_items, added by migration 0010) - single source of
+# truth here, same pattern as adminReturnRequestDTO.py's VALID_RETURN_STATUSES.
+VALID_REPLACE_ISSUE_CATEGORIES = ("size_issue", "defect")
+
+
+class ReplaceItemRequestDTO(BaseModel):
+    vstitch_order_item_id: int = Field(..., ge=1)
+    quantity: int = Field(..., ge=1, le=100)
+
+
+class CreateReplaceRequestDTO(BaseModel):
+    issue_category: str = Field(..., min_length=1, max_length=20)
+    reason: str = Field(..., min_length=1, max_length=500)
+    items: List[ReplaceItemRequestDTO] = Field(..., min_length=1, max_length=50)
+
+    @field_validator("issue_category")
+    @classmethod
+    def validate_issue_category(cls, value):
+        if value not in VALID_REPLACE_ISSUE_CATEGORIES:
+            raise ValueError(f"issue_category must be one of {VALID_REPLACE_ISSUE_CATEGORIES}.")
+        return value
 
 
 class AssignAwbRequestDTO(BaseModel):
