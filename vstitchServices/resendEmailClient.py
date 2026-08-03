@@ -21,22 +21,43 @@ class ResendEmailClient:
         if not self.from_email:
             raise ValueError("VSTITCH_RESEND_EMAIL is not configured in the environment.")
 
-    def send_email(self, to_email, subject, html_body, attachments=None):
-        """Sends one HTML email. `attachments`, if given, is a list of
-        {"filename": ..., "content": <base64-encoded bytes>} dicts - Resend's
-        own attachment shape. Raises requests.HTTPError/RequestException on
-        failure rather than swallowing it - the caller (OrderEmailService)
-        is what decides a send failure must never propagate up into the
-        order/payment flow, not this client.
+    def send_email(self, to_email, subject, html_body=None, text_body=None, attachments=None, headers=None):
+        """Sends one email. Exactly one of html_body/text_body is the usual
+        case (Resend accepts either or both), so both are optional here
+        rather than html_body being required - the plain-text
+        customization-interest notification has no HTML version at all.
+        Raises ValueError if neither is given, since Resend itself would
+        otherwise reject the request with a less obvious error.
+
+        `attachments`, if given, is a list of {"filename": ...,
+        "content": <base64-encoded bytes>} dicts - Resend's own attachment
+        shape. `headers`, if given, is a dict of extra transport headers
+        (e.g. {"Importance": "high"}) - passed through as-is, Resend's own
+        "headers" field.
+
+        Raises requests.HTTPError/RequestException on failure rather than
+        swallowing it - it's each caller's own decision whether a send
+        failure may propagate (e.g. CustomizationInterestService, where
+        sending *is* the endpoint's deliverable) or must never do so (e.g.
+        OrderEmailService, where the order/payment flow must never fail
+        because of an email problem) - not this client's to make.
         """
+        if not html_body and not text_body:
+            raise ValueError("send_email requires html_body and/or text_body.")
+
         payload = {
             "from": self.from_email,
             "to": [to_email],
             "subject": subject,
-            "html": html_body,
         }
+        if html_body:
+            payload["html"] = html_body
+        if text_body:
+            payload["text"] = text_body
         if attachments:
             payload["attachments"] = attachments
+        if headers:
+            payload["headers"] = headers
 
         response = requests.post(
             RESEND_API_URL,

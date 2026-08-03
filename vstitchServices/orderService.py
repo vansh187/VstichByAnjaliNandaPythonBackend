@@ -1,4 +1,5 @@
 import logging
+import threading
 
 from vstitchDatabase.orderPersistence import OrderPersistence
 from vstitchDTO.orderResponseDTO import (
@@ -138,20 +139,34 @@ class OrderService:
             )
 
     def _send_order_confirmation_emails(self, vstitch_order_id):
-        """Sends the customer order-confirmation + admin packing-notification
-        emails for a just-placed COD order. Never raises: OrderEmailService
-        already isolates each of its own internal steps, but this call site
-        is wrapped too (same defense-in-depth as _create_shipment above) so
-        an unanticipated bug in the email path can never turn a successful
-        order placement into a 500 for the customer.
+        """Fires the customer order-confirmation + admin packing-notification
+        emails for a just-placed COD order on a background thread, not
+        inline: PDF generation plus two sequential Resend HTTP calls (each
+        with its own 10s timeout) can add real seconds to what should be a
+        fast checkout response, so the customer's POST /orders response
+        must not wait on it. The connection pool is already built for this
+        (ConnectionFactory's ThreadedConnectionPool is explicitly sized for
+        concurrent worker threads), so this is a natural extension of the
+        existing sync-def-on-a-thread-pool model, not a new concurrency
+        pattern.
+
+        Never raises into the caller either way: OrderEmailService already
+        isolates each of its own internal steps, and the thread target
+        below is wrapped too (same defense-in-depth as _create_shipment
+        above) so an unanticipated bug in the email path can never surface
+        anywhere the customer-facing response would see it.
         """
-        try:
-            OrderEmailService().send_order_confirmation_emails(vstitch_order_id)
-        except Exception:
-            logger.exception(
-                "Order confirmation emails failed for VStitch order %s - order/stock state is unaffected.",
-                vstitch_order_id,
-            )
+
+        def _send():
+            try:
+                OrderEmailService().send_order_confirmation_emails(vstitch_order_id)
+            except Exception:
+                logger.exception(
+                    "Order confirmation emails failed for VStitch order %s - order/stock state is unaffected.",
+                    vstitch_order_id,
+                )
+
+        threading.Thread(target=_send, daemon=True).start()
 
     def create_pending_gateway_order(
         self, order_items, total_amount, create_order_request_dto, vstitch_user_id, created_by_ip_address, razorpay_order_id
