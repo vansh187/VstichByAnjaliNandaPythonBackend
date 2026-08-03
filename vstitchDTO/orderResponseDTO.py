@@ -5,7 +5,18 @@ from pydantic import BaseModel
 
 
 class OrderItemResponseDTO(BaseModel):
-    vstitch_product_variant_id: int
+    # Optional/None only right after order placement (CreateOrderResponseDTO),
+    # since the freshly-inserted item rows' own ids aren't returned by the
+    # bulk insert - always populated once an order is read back via
+    # GET /orders (OrderDetailResponseDTO), where it's needed to reference a
+    # specific line item in a replace request.
+    vstitch_order_item_id: Optional[int] = None
+    # Optional: VStitch_OrderItems.VstitchProductVariantId is
+    # ON DELETE SET NULL - an order placed against a variant that was later
+    # deleted from the catalog legitimately has NULL here. The order-item
+    # snapshot fields below (product_name/size/color/unit_price) are what
+    # actually describe what was purchased regardless.
+    vstitch_product_variant_id: Optional[int] = None
     product_name: str
     size: Optional[str]
     color: Optional[str]
@@ -38,6 +49,9 @@ class OrderDetailResponseDTO(BaseModel):
     shipping_phone_number: str
     created_date: datetime
     awb_code: Optional[str]
+    delivered_date: Optional[datetime]
+    can_return: bool
+    can_replace: bool
     items: List[OrderItemResponseDTO]
 
 

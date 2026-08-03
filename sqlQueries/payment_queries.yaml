@@ -58,3 +58,72 @@ insert_webhook_event: |
   VALUES (%s, %s, %s, %s, %s, %s)
   ON CONFLICT (RazorpayEventId) DO NOTHING
   RETURNING VstitchPaymentWebhookEventId;
+
+# --- Refunds (return/replace completion -> Razorpay -> webhook) ----------
+
+find_captured_transaction_by_order_id: |
+  -- The refund trigger's entry point: given an order whose return/replace
+  -- was just marked 'completed', find the payment to refund. Only a
+  -- 'captured' transaction is refundable - None here means nothing to
+  -- refund (COD order, not yet captured, or already refunded/in flight).
+  SELECT VstitchPaymentTransactionId, VstitchOrderId, RazorpayPaymentId, PaymentStatus, Amount, Currency
+  FROM VStitch_PaymentTransactions
+  WHERE VstitchOrderId = %s
+    AND PaymentStatus = 'captured'
+  ORDER BY VstitchPaymentTransactionId DESC
+  LIMIT 1;
+
+mark_payment_refund_pending: |
+  -- Atomic claim, mirroring update_transaction_status's old-status guard
+  -- pattern - called BEFORE the Razorpay refund API call, not after, so a
+  -- concurrent duplicate refund trigger (e.g. two admin clicks completing
+  -- the same return in quick succession) is blocked by the DB before a
+  -- second real refund is ever issued at the gateway, not just recorded as
+  -- a failed DB write afterward. Only the first caller to commit finds the
+  -- row still 'captured'; the second gets no row back and must never call
+  -- Razorpay at all.
+  UPDATE VStitch_PaymentTransactions
+  SET PaymentStatus = 'refund_pending',
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE RazorpayPaymentId = %(razorpay_payment_id)s
+    AND PaymentStatus = 'captured'
+  RETURNING VstitchPaymentTransactionId, VstitchOrderId;
+
+set_razorpay_refund_id: |
+  -- Fills in Razorpay's own refund id once the refund request actually
+  -- succeeds at the gateway - the claim above (mark_payment_refund_pending)
+  -- happens first and doesn't have this id yet.
+  UPDATE VStitch_PaymentTransactions
+  SET RazorpayRefundId = %(razorpay_refund_id)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE RazorpayPaymentId = %(razorpay_payment_id)s
+    AND PaymentStatus = 'refund_pending'
+  RETURNING VstitchPaymentTransactionId;
+
+mark_payment_refunded: |
+  -- Guarded refund_pending -> refunded transition, applied once Razorpay's
+  -- refund.processed webhook confirms the refund actually completed.
+  UPDATE VStitch_PaymentTransactions
+  SET PaymentStatus = 'refunded',
+      RefundedAmount = %(refunded_amount)s,
+      RefundedAt = CURRENT_TIMESTAMP,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE RazorpayPaymentId = %(razorpay_payment_id)s
+    AND PaymentStatus = 'refund_pending'
+  RETURNING VstitchPaymentTransactionId, VstitchOrderId;
+
+mark_payment_refund_failed: |
+  -- Guarded refund_pending -> captured revert, applied on Razorpay's
+  -- refund.failed webhook - reverting to 'captured' (rather than a dead-end
+  -- 'refund_failed' state) is what makes the refund retryable from
+  -- AdminReturnService without any extra admin action beyond re-completing.
+  UPDATE VStitch_PaymentTransactions
+  SET PaymentStatus = 'captured',
+      FailureReason = %(failure_reason)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE RazorpayPaymentId = %(razorpay_payment_id)s
+    AND PaymentStatus = 'refund_pending'
+  RETURNING VstitchPaymentTransactionId, VstitchOrderId;

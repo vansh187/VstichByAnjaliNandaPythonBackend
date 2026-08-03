@@ -40,9 +40,14 @@ insert_order_items_bulk: |
   VALUES %s;
 
 get_orders_for_user: |
+  -- ReturnEligible is computed here (SQL), not in Python, to avoid
+  -- clock-skew/timezone drift between the app server and the DB server -
+  -- the DB's own CURRENT_TIMESTAMP is the single source of truth for "has it
+  -- been 7 days since delivery".
   SELECT VstitchOrderId, OrderStatus, PaymentMethod, TotalAmount, ShippingRecipientName, ShippingAddressLine1,
          ShippingAddressLine2, ShippingCity, ShippingState, ShippingPostalCode, ShippingCountry, ShippingPhoneNumber,
-         created_date, AwbCode
+         created_date, AwbCode, DeliveredDate,
+         (DeliveredDate IS NOT NULL AND DeliveredDate <= CURRENT_TIMESTAMP - INTERVAL '7 days') AS ReturnEligible
   FROM VStitch_Orders
   WHERE VstitchUserId = %(vstitch_user_id)s
     AND (%(before_id)s::BIGINT IS NULL OR VstitchOrderId < %(before_id)s)
@@ -90,11 +95,19 @@ update_order_status_admin: |
   -- Deliberately ungated on the old status (unlike update_order_status_guarded) -
   -- this is an intentional admin override, not a forward-pipeline transition,
   -- so any valid OrderStatus is accepted from any prior status. Still uses
-  -- RETURNING to distinguish "order not found" from "updated".
+  -- RETURNING to distinguish "order not found" from "updated". DeliveredDate
+  -- is stamped exactly once (COALESCE) the first time an admin override
+  -- marks an order 'delivered' - moving it away from 'delivered' later never
+  -- clears it, so it stays the true "when did this first become delivered"
+  -- record even across a later correction.
   UPDATE VStitch_Orders
   SET OrderStatus = %(new_status)s,
       updated_by = %(updated_by)s,
-      updated_date = CURRENT_TIMESTAMP
+      updated_date = CURRENT_TIMESTAMP,
+      DeliveredDate = CASE
+          WHEN %(new_status)s = 'delivered' THEN COALESCE(DeliveredDate, CURRENT_TIMESTAMP)
+          ELSE DeliveredDate
+      END
   WHERE VstitchOrderId = %(vstitch_order_id)s
   RETURNING VstitchOrderId;
 
@@ -143,12 +156,13 @@ pending_shipments_count: |
 
 list_returns_for_admin: |
   SELECT ro.VstitchReturnOrderId, ro.VstitchOrderId, (u.FirstName || ' ' || u.LastName) AS CustomerName,
-         u.Email AS CustomerEmail, ro.Reason, ro.Status, ro.ShiprocketReturnOrderId, ro.ShiprocketShipmentId,
-         ro.created_date
+         u.Email AS CustomerEmail, ro.Reason, ro.Status, ro.RequestType, ro.ShiprocketReturnOrderId,
+         ro.ShiprocketShipmentId, ro.created_date
   FROM VStitch_ReturnOrders ro
   JOIN VStitch_Orders o ON o.VstitchOrderId = ro.VstitchOrderId
   JOIN VStitch_Users u ON u.VstitchUserId = o.VstitchUserId
   WHERE (%(status)s::VARCHAR IS NULL OR ro.Status = %(status)s)
+    AND (%(request_type)s::VARCHAR IS NULL OR ro.RequestType = %(request_type)s)
     AND (%(after_id)s::BIGINT IS NULL OR ro.VstitchReturnOrderId < %(after_id)s)
   ORDER BY ro.VstitchReturnOrderId DESC
   LIMIT %(limit_plus_one)s;
@@ -169,15 +183,25 @@ update_return_status_admin: |
   WHERE ro.VstitchReturnOrderId = %(vstitch_return_order_id)s
     AND o.VstitchOrderId = ro.VstitchOrderId
   RETURNING ro.VstitchReturnOrderId, ro.VstitchOrderId, (u.FirstName || ' ' || u.LastName) AS CustomerName,
-            u.Email AS CustomerEmail, ro.Reason, ro.Status, ro.ShiprocketReturnOrderId, ro.ShiprocketShipmentId,
-            ro.created_date;
+            u.Email AS CustomerEmail, ro.Reason, ro.Status, ro.RequestType, ro.ShiprocketReturnOrderId,
+            ro.ShiprocketShipmentId, ro.created_date;
 
 get_order_items_for_orders: |
-  SELECT VstitchOrderId, VstitchProductVariantId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,
+  SELECT VstitchOrderId, VstitchOrderItemId, VstitchProductVariantId, ProductNameSnapshot, SizeSnapshot, ColorSnapshot,
          UnitPriceSnapshot, Quantity
   FROM VStitch_OrderItems
   WHERE VstitchOrderId = ANY(%s)
   ORDER BY VstitchOrderId, VstitchOrderItemId;
+
+get_order_items_by_ids_for_order: |
+  -- Item-level IDOR guard for the replace flow: confirms every requested
+  -- VstitchOrderItemId actually belongs to this VstitchOrderId (and thus, by
+  -- the caller's own ownership check on the order, to the requesting user)
+  -- before anything is built from it.
+  SELECT VstitchOrderItemId, VstitchOrderId, Quantity
+  FROM VStitch_OrderItems
+  WHERE VstitchOrderId = %s
+    AND VstitchOrderItemId = ANY(%s);
 
 get_order_items_for_orders_admin: |
   -- Same table as get_order_items_for_orders but includes VstitchOrderItemId -
@@ -246,7 +270,10 @@ save_awb_details_if_unset: |
   RETURNING VstitchOrderId;
 
 get_order_for_tracking: |
-  SELECT VstitchOrderId, VstitchUserId, OrderStatus, ShiprocketOrderId, ShiprocketShipmentId, AwbCode
+  -- DeliveredDate is included so the return/replace eligibility gate can
+  -- read it fresh from the DB on every request - never trusted from a
+  -- client-supplied value or a stale earlier GET /orders response.
+  SELECT VstitchOrderId, VstitchUserId, OrderStatus, ShiprocketOrderId, ShiprocketShipmentId, AwbCode, DeliveredDate
   FROM VStitch_Orders
   WHERE VstitchOrderId = %s;
 
@@ -261,10 +288,19 @@ find_order_by_shiprocket_order_id: |
 # copy here so OrderPersistence doesn't need to reach into another
 # persistence class's query file for a generic status transition.
 update_order_status_guarded: |
+  -- DeliveredDate is stamped exactly once (COALESCE), the first time an
+  -- order transitions to 'delivered' - a later transition away from
+  -- 'delivered' (there isn't a valid forward one today, but a future admin
+  -- override still routes through update_order_status_admin, not this
+  -- query) never clears it.
   UPDATE VStitch_Orders
   SET OrderStatus = %(new_status)s,
       updated_by = %(updated_by)s,
-      updated_date = CURRENT_TIMESTAMP
+      updated_date = CURRENT_TIMESTAMP,
+      DeliveredDate = CASE
+          WHEN %(new_status)s = 'delivered' THEN COALESCE(DeliveredDate, CURRENT_TIMESTAMP)
+          ELSE DeliveredDate
+      END
   WHERE VstitchOrderId = %(vstitch_order_id)s
     AND OrderStatus = ANY(%(old_statuses)s)
   RETURNING VstitchOrderId;
@@ -277,12 +313,54 @@ restock_variants_for_order: |
   WHERE oi.VstitchOrderId = %s
     AND pv.VstitchProductVariantId = oi.VstitchProductVariantId;
 
-insert_return_order: |
+insert_return_order_with_type: |
+  -- Replaces insert_return_order - RequestType distinguishes a plain
+  -- customer return from a replace request, both stored in this same table
+  -- (see migration 0010).
   INSERT INTO VStitch_ReturnOrders
-      (VstitchOrderId, ShiprocketReturnOrderId, ShiprocketShipmentId, Reason, Status, created_by)
+      (VstitchOrderId, RequestType, ShiprocketReturnOrderId, ShiprocketShipmentId, Reason, Status, created_by)
   VALUES
-      (%s, %s, %s, %s, 'requested', %s)
+      (%s, %s, %s, %s, %s, 'requested', %s)
   RETURNING VstitchReturnOrderId;
+
+insert_return_order_items_bulk: |
+  INSERT INTO VStitch_ReturnOrderItems
+      (VstitchReturnOrderId, VstitchOrderItemId, Quantity, IssueCategory, created_by)
+  VALUES %s;
+
+save_return_order_shiprocket_ids: |
+  -- Fills in Shiprocket's own ids once the return-pickup shipment is
+  -- actually created - the claim row (insert_return_order_with_type,
+  -- called before the Shiprocket call) is inserted with both NULL.
+  UPDATE VStitch_ReturnOrders
+  SET ShiprocketReturnOrderId = %(shiprocket_return_order_id)s,
+      ShiprocketShipmentId = %(shiprocket_shipment_id)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchReturnOrderId = %(vstitch_return_order_id)s;
+
+cancel_return_order_claim: |
+  -- Frees the uq_return_orders_open_per_order slot when the Shiprocket call
+  -- for a just-claimed return/replace request fails - 'cancelled' is
+  -- excluded from the partial unique index's WHERE clause, so the order
+  -- becomes eligible for a fresh attempt immediately, while the failed
+  -- attempt itself stays on record for audit.
+  UPDATE VStitch_ReturnOrders
+  SET Status = 'cancelled',
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchReturnOrderId = %(vstitch_return_order_id)s;
+
+find_open_return_request_for_order: |
+  -- Duplicate-request guard: a return/replace already in flight (not yet
+  -- rejected/cancelled/completed) blocks a second one from being filed
+  -- against the same order, so a double-click or resubmission can never
+  -- create two Shiprocket return-pickup shipments for the same order.
+  SELECT VstitchReturnOrderId, RequestType, Status
+  FROM VStitch_ReturnOrders
+  WHERE VstitchOrderId = %s
+    AND Status NOT IN ('rejected', 'cancelled', 'completed')
+  LIMIT 1;
 
 decrement_variant_stock_bulk: |
   UPDATE VStitch_ProductVariants pv

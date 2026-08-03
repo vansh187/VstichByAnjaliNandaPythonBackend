@@ -1,9 +1,21 @@
+import psycopg2.errors
 from psycopg2.extras import execute_values
 
 from vstitchDatabase.ConnectionFactory import connection_factory
 from vstitchDatabase.queryLoader import QueryLoader
+from vstitchDatabase.uniqueConstraintError import translate_unique_violation
 
 ORDER_ITEM_INSERT_TEMPLATE = "(%s, %s, %s, %s, %s, %s, %s, %s)"
+
+# uq_return_orders_open_per_order (migration 0012) is the DB-enforced
+# invariant closing the TOCTOU race in ShipmentService.
+# _assert_no_open_return_request's own SELECT-then-decide pre-check - a
+# second concurrent insert_return_order_with_type for the same order (while
+# an earlier one is still open) violates this partial unique index instead
+# of silently succeeding.
+RETURN_ORDER_UNIQUE_CONSTRAINT_MESSAGES = {
+    "uq_return_orders_open_per_order": "This order already has an open return or replace request in progress.",
+}
 
 
 class OrderPersistence:
@@ -64,6 +76,8 @@ class OrderPersistence:
                 "shipping_phone_number",
                 "created_date",
                 "awb_code",
+                "delivered_date",
+                "return_eligible",
             )
             return [dict(zip(column_names, row)) for row in order_rows]
 
@@ -83,15 +97,49 @@ class OrderPersistence:
             for row in item_rows:
                 items_by_order_id.setdefault(row[0], []).append(
                     {
-                        "vstitch_product_variant_id": row[1],
-                        "product_name": row[2],
-                        "size": row[3],
-                        "color": row[4],
-                        "unit_price": row[5],
-                        "quantity": row[6],
+                        "vstitch_order_item_id": row[1],
+                        "vstitch_product_variant_id": row[2],
+                        "product_name": row[3],
+                        "size": row[4],
+                        "color": row[5],
+                        "unit_price": row[6],
+                        "quantity": row[7],
                     }
                 )
             return items_by_order_id
+
+    def get_order_items_by_ids_for_order(self, vstitch_order_id, vstitch_order_item_ids):
+        """Item-level IDOR guard for the replace flow: returns only the
+        requested items that actually belong to this order, keyed by
+        VstitchOrderItemId - a caller-requested id absent from the result was
+        either never on this order or belongs to someone else's, and both
+        cases must be treated identically (anti-enumeration)."""
+        if not vstitch_order_item_ids:
+            return {}
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("get_order_items_by_ids_for_order"),
+                    (vstitch_order_id, list(vstitch_order_item_ids)),
+                )
+                rows = cursor.fetchall()
+            return {row[0]: {"vstitch_order_id": row[1], "quantity": row[2]} for row in rows}
+
+    def find_open_return_request_for_order(self, vstitch_order_id):
+        """Returns the open (not rejected/cancelled/completed) return or
+        replace request against this order, or None if there isn't one -
+        the duplicate-request guard shared by both create_return and
+        create_replace."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("find_open_return_request_for_order"),
+                    (vstitch_order_id,),
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            return {"vstitch_return_order_id": row[0], "request_type": row[1], "status": row[2]}
 
     # --- Admin: cross-customer order management --------------------------
 
@@ -233,26 +281,20 @@ class OrderPersistence:
 
     # --- Admin: returns ------------------------------------------------
 
-    def list_returns_for_admin(self, status, after_id, limit_plus_one):
+    def list_returns_for_admin(self, status, request_type, after_id, limit_plus_one):
         with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     self.query_loader.get_query("list_returns_for_admin"),
-                    {"status": status, "after_id": after_id, "limit_plus_one": limit_plus_one},
+                    {
+                        "status": status,
+                        "request_type": request_type,
+                        "after_id": after_id,
+                        "limit_plus_one": limit_plus_one,
+                    },
                 )
                 rows = cursor.fetchall()
-            column_names = (
-                "vstitch_return_order_id",
-                "vstitch_order_id",
-                "customer_name",
-                "customer_email",
-                "reason",
-                "status",
-                "shiprocket_return_order_id",
-                "shiprocket_shipment_id",
-                "created_date",
-            )
-            return [dict(zip(column_names, row)) for row in rows]
+            return [dict(zip(self._return_order_column_names(), row)) for row in rows]
 
     def update_return_status_admin(self, vstitch_return_order_id, new_status, updated_by):
         """Free-form admin override, same shape as update_order_status_admin.
@@ -272,18 +314,22 @@ class OrderPersistence:
             connection.commit()
             if row is None:
                 return None
-            column_names = (
-                "vstitch_return_order_id",
-                "vstitch_order_id",
-                "customer_name",
-                "customer_email",
-                "reason",
-                "status",
-                "shiprocket_return_order_id",
-                "shiprocket_shipment_id",
-                "created_date",
-            )
-            return dict(zip(column_names, row))
+            return dict(zip(self._return_order_column_names(), row))
+
+    @staticmethod
+    def _return_order_column_names():
+        return (
+            "vstitch_return_order_id",
+            "vstitch_order_id",
+            "customer_name",
+            "customer_email",
+            "reason",
+            "status",
+            "request_type",
+            "shiprocket_return_order_id",
+            "shiprocket_shipment_id",
+            "created_date",
+        )
 
     def get_order_for_shipment(self, vstitch_order_id):
         """Fetches everything a Shiprocket create-order call needs for one
@@ -412,6 +458,7 @@ class OrderPersistence:
                 "shiprocket_order_id",
                 "shiprocket_shipment_id",
                 "awb_code",
+                "delivered_date",
             )
             return dict(zip(column_names, row))
 
@@ -484,18 +531,103 @@ class OrderPersistence:
             connection.commit()
             return order_row is not None
 
-    def create_return_order(
-        self, vstitch_order_id, reason, created_by, shiprocket_return_order_id=None, shiprocket_shipment_id=None
+    def create_return_order_claim(self, vstitch_order_id, request_type, reason, created_by):
+        """Atomically claims the 'one open return/replace request per
+        order' slot (backed by uq_return_orders_open_per_order), with both
+        Shiprocket ids NULL - called BEFORE the Shiprocket call, not after,
+        so a duplicate concurrent request is blocked by the DB before a
+        second real Shiprocket return-pickup shipment is ever filed, not
+        just recorded as a failed DB write afterward. The caller fills in
+        the Shiprocket ids via save_return_order_shiprocket_ids once the
+        shipment is actually created, or frees the slot via
+        cancel_return_order_claim if the Shiprocket call fails.
+        """
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                try:
+                    cursor.execute(
+                        self.query_loader.get_query("insert_return_order_with_type"),
+                        (vstitch_order_id, request_type, None, None, reason, created_by),
+                    )
+                except psycopg2.errors.UniqueViolation as unique_violation:
+                    connection.rollback()
+                    raise translate_unique_violation(
+                        unique_violation,
+                        RETURN_ORDER_UNIQUE_CONSTRAINT_MESSAGES,
+                        "This order already has an open return or replace request in progress.",
+                    ) from unique_violation
+                vstitch_return_order_id = cursor.fetchone()[0]
+            connection.commit()
+            return vstitch_return_order_id
+
+    def create_replace_request_claim(self, vstitch_order_id, reason, item_rows, created_by):
+        """Same claim-before-Shiprocket-call shape as
+        create_return_order_claim, plus the VStitch_ReturnOrderItems line
+        rows inserted in the same transaction - a replace claim is never
+        left with a header but no items, or vice versa. item_rows is a list
+        of {"vstitch_order_item_id", "quantity", "issue_category"} dicts,
+        already validated (ownership + quantity cap) by the caller."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                try:
+                    cursor.execute(
+                        self.query_loader.get_query("insert_return_order_with_type"),
+                        (vstitch_order_id, "replace", None, None, reason, created_by),
+                    )
+                except psycopg2.errors.UniqueViolation as unique_violation:
+                    connection.rollback()
+                    raise translate_unique_violation(
+                        unique_violation,
+                        RETURN_ORDER_UNIQUE_CONSTRAINT_MESSAGES,
+                        "This order already has an open return or replace request in progress.",
+                    ) from unique_violation
+                vstitch_return_order_id = cursor.fetchone()[0]
+
+                execute_values(
+                    cursor,
+                    self.query_loader.get_query("insert_return_order_items_bulk"),
+                    [
+                        (
+                            vstitch_return_order_id,
+                            item_row["vstitch_order_item_id"],
+                            item_row["quantity"],
+                            item_row["issue_category"],
+                            created_by,
+                        )
+                        for item_row in item_rows
+                    ],
+                )
+            connection.commit()
+            return vstitch_return_order_id
+
+    def save_return_order_shiprocket_ids(
+        self, vstitch_return_order_id, shiprocket_return_order_id, shiprocket_shipment_id, updated_by
     ):
         with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    self.query_loader.get_query("insert_return_order"),
-                    (vstitch_order_id, shiprocket_return_order_id, shiprocket_shipment_id, reason, created_by),
+                    self.query_loader.get_query("save_return_order_shiprocket_ids"),
+                    {
+                        "vstitch_return_order_id": vstitch_return_order_id,
+                        "shiprocket_return_order_id": shiprocket_return_order_id,
+                        "shiprocket_shipment_id": shiprocket_shipment_id,
+                        "updated_by": updated_by,
+                    },
                 )
-                vstitch_return_order_id = cursor.fetchone()[0]
             connection.commit()
-            return vstitch_return_order_id
+
+    def cancel_return_order_claim(self, vstitch_return_order_id, updated_by):
+        """Frees the claimed slot when the Shiprocket call for it failed -
+        best-effort cleanup, called by the service layer from inside its own
+        except block, so a problem here must never mask the original
+        Shiprocket failure that's already being raised."""
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("cancel_return_order_claim"),
+                    {"vstitch_return_order_id": vstitch_return_order_id, "updated_by": updated_by},
+                )
+            connection.commit()
 
     def create_cod_order(
         self,

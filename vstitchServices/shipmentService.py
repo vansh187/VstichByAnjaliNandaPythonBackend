@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime, timedelta
 
 from vstitchDatabase.orderPersistence import OrderPersistence
 from vstitchServices.orderStatus import OrderStatus, old_statuses_that_can_reach
@@ -86,6 +87,16 @@ SHIPROCKET_PAYMENT_METHOD_BY_ORDER_PAYMENT_METHOD = {
 # a courier for real - matches OrderStatus.ALLOWED_TRANSITIONS' own CANCELLED
 # exits (SHIPPED onward has no CANCELLED transition at all).
 CANCELLABLE_ORDER_STATUSES = (OrderStatus.PLACED, OrderStatus.CONFIRMED, OrderStatus.PROCESSING)
+
+# A customer can request a return/replace once an order has been delivered
+# for at least this many days - no upper bound is enforced (only this floor).
+RETURN_REPLACE_ELIGIBILITY_DAYS = 7
+
+# VStitch_ReturnOrderItems.IssueCategory CHECK-constraint values (migration
+# 0010) - mirrored in vstitchDTO/shipmentRequestDTO.py's
+# VALID_REPLACE_ISSUE_CATEGORIES, which is what actually validates the
+# incoming request; this copy is what create_replace itself trusts.
+REPLACE_ISSUE_CATEGORIES = ("size_issue", "defect")
 
 
 class ShipmentService:
@@ -277,53 +288,215 @@ class ShipmentService:
             raise ValueError(f"Order {vstitch_order_id} was not found.")
         return order
 
-    # --- Returns -----------------------------------------------------------
+    # --- Returns / Replace ---------------------------------------------------
 
     def create_return(self, vstitch_order_id, vstitch_user_id, reason):
         """Records a return request and files it with Shiprocket. Only valid
-        once an order has actually been delivered - there's nothing to
-        return before then. The exact /orders/create/return request shape
-        wasn't provided when this was built, so it's modeled on Shiprocket's
-        adhoc create-order shape with pickup/delivery swapped (their
-        documented pattern for a return); verify against Shiprocket's return
-        API reference before relying on this in production.
+        once an order has actually been delivered for at least
+        RETURN_REPLACE_ELIGIBILITY_DAYS, and only if no other return/replace
+        request is already open against this order. The exact
+        /orders/create/return request shape wasn't provided when this was
+        built, so it's modeled on Shiprocket's adhoc create-order shape with
+        pickup/delivery swapped (their documented pattern for a return);
+        verify against Shiprocket's return API reference before relying on
+        this in production. Known limitation, left as-is: the destination
+        ("shipping_address") is only a location-name string with no city/
+        state/pincode override - see _swap_to_return_pickup_shape.
         """
         order = self._get_owned_order_for_tracking(vstitch_order_id, vstitch_user_id)
         if order["order_status"] != OrderStatus.DELIVERED:
             raise ValueError(f"Order {vstitch_order_id} has not been delivered yet - nothing to return.")
+        self._assert_return_replace_eligible(order, vstitch_order_id)
+        self._assert_no_open_return_request(vstitch_order_id)
 
         full_order = self.order_persistence.get_order_for_shipment(vstitch_order_id)
         if full_order is None:
             raise ValueError(f"Order {vstitch_order_id} was not found.")
 
+        # Claims the "one open request per order" slot atomically (backed by
+        # uq_return_orders_open_per_order) BEFORE calling Shiprocket - not
+        # after - so a duplicate concurrent request is blocked by the DB
+        # before a second real Shiprocket shipment is ever filed. See
+        # _assert_no_open_return_request's docstring for why that earlier
+        # check alone isn't sufficient (TOCTOU).
+        vstitch_return_order_id = self.order_persistence.create_return_order_claim(
+            vstitch_order_id, "return", reason, "customer-return-request"
+        )
+
         return_payload = self._build_shiprocket_payload(full_order)
         return_payload["order_id"] = f"{vstitch_order_id}-RETURN-{os.urandom(4).hex()}"
-        # Swap pickup/delivery: the customer's address becomes the pickup
-        # point, our own pickup location becomes the delivery destination.
-        return_payload["pickup_customer_name"] = return_payload.pop("billing_customer_name")
-        return_payload["pickup_last_name"] = return_payload.pop("billing_last_name")
-        return_payload["pickup_address"] = return_payload.pop("billing_address")
-        return_payload["pickup_city"] = return_payload.pop("billing_city")
-        return_payload["pickup_pincode"] = return_payload.pop("billing_pincode")
-        return_payload["pickup_state"] = return_payload.pop("billing_state")
-        return_payload["pickup_country"] = return_payload.pop("billing_country")
-        return_payload["pickup_email"] = return_payload.pop("billing_email")
-        return_payload["pickup_phone"] = return_payload.pop("billing_phone")
-        return_payload["shipping_customer_name"] = "VStitch Warehouse"
-        return_payload["shipping_address"] = self.pickup_location
-        return_payload.pop("shipping_is_billing", None)
-        return_payload.pop("billing_address_2", None)
+        self._swap_to_return_pickup_shape(return_payload)
 
-        response = self.shiprocket_client.create_return_order(return_payload)
+        try:
+            response = self.shiprocket_client.create_return_order(return_payload)
+        except Exception:
+            self._cancel_return_claim_best_effort(vstitch_return_order_id)
+            raise
 
-        vstitch_return_order_id = self.order_persistence.create_return_order(
-            vstitch_order_id,
-            reason,
-            "customer-return-request",
-            shiprocket_return_order_id=response.get("order_id"),
-            shiprocket_shipment_id=response.get("shipment_id"),
+        self.order_persistence.save_return_order_shiprocket_ids(
+            vstitch_return_order_id, response.get("order_id"), response.get("shipment_id"), "shiprocket-integration"
         )
         return vstitch_return_order_id, response
+
+    def create_replace(self, vstitch_order_id, vstitch_user_id, issue_category, reason, items):
+        """Records a replace request (size/defect issue on specific order
+        items) and files the same kind of Shiprocket return-pickup shipment
+        create_return does, scoped to only the requested items. `items` is a
+        list of {"vstitch_order_item_id", "quantity"} dicts (already
+        Pydantic-validated for shape/bounds by CreateReplaceRequestDTO).
+        Shipping the replacement item back out is a manual ops step, not
+        automated here.
+        """
+        if issue_category not in REPLACE_ISSUE_CATEGORIES:
+            raise ValueError(f"issue_category must be one of {REPLACE_ISSUE_CATEGORIES}.")
+
+        order = self._get_owned_order_for_tracking(vstitch_order_id, vstitch_user_id)
+        if order["order_status"] != OrderStatus.DELIVERED:
+            raise ValueError(f"Order {vstitch_order_id} has not been delivered yet - nothing to replace.")
+        self._assert_return_replace_eligible(order, vstitch_order_id)
+        self._assert_no_open_return_request(vstitch_order_id)
+
+        # Merge repeated entries for the same order item into one running
+        # total before checking against what was actually ordered - two
+        # separate {item_id: 42, quantity: 1} entries for an item that was
+        # only ordered once must jointly fail the quantity check, not each
+        # pass it individually against the same un-decremented total.
+        requested_quantity_by_item_id = {}
+        for item in items:
+            item_id = item["vstitch_order_item_id"]
+            requested_quantity_by_item_id[item_id] = requested_quantity_by_item_id.get(item_id, 0) + item["quantity"]
+
+        owned_items_by_id = self.order_persistence.get_order_items_by_ids_for_order(
+            vstitch_order_id, list(requested_quantity_by_item_id.keys())
+        )
+        for item_id, total_quantity in requested_quantity_by_item_id.items():
+            owned_item = owned_items_by_id.get(item_id)
+            # Same "not found" message whether the item id doesn't exist at
+            # all or belongs to a different order - confirming an item id
+            # exists but belongs to someone else's order is exactly the
+            # enumeration leak _get_owned_order_for_tracking already guards
+            # against at the order level.
+            if owned_item is None:
+                raise ValueError(f"Order {vstitch_order_id} was not found.")
+            if total_quantity > owned_item["quantity"]:
+                raise ValueError(
+                    f"Requested quantity for order item {item_id} exceeds the "
+                    f"{owned_item['quantity']} originally ordered."
+                )
+
+        full_order = self.order_persistence.get_order_for_shipment(vstitch_order_id)
+        if full_order is None:
+            raise ValueError(f"Order {vstitch_order_id} was not found.")
+
+        requested_item_id_set = set(requested_quantity_by_item_id.keys())
+        filtered_items = [
+            item for item in full_order["items"] if item["vstitch_order_item_id"] in requested_item_id_set
+        ]
+        if not filtered_items:
+            raise ValueError(f"Order {vstitch_order_id} was not found.")
+        filtered_order = dict(full_order, items=filtered_items)
+
+        item_rows = [
+            {"vstitch_order_item_id": item_id, "quantity": total_quantity, "issue_category": issue_category}
+            for item_id, total_quantity in requested_quantity_by_item_id.items()
+        ]
+
+        # Same claim-before-Shiprocket-call shape as create_return - see its
+        # comment for why the slot is claimed here, not after the Shiprocket
+        # call succeeds.
+        vstitch_return_order_id = self.order_persistence.create_replace_request_claim(
+            vstitch_order_id, f"[{issue_category}] {reason}", item_rows, "customer-replace-request"
+        )
+
+        replace_payload = self._build_shiprocket_payload(filtered_order)
+        replace_payload["order_id"] = f"{vstitch_order_id}-REPLACE-{os.urandom(4).hex()}"
+        self._swap_to_return_pickup_shape(replace_payload)
+
+        try:
+            response = self.shiprocket_client.create_return_order(replace_payload)
+        except Exception:
+            self._cancel_return_claim_best_effort(vstitch_return_order_id)
+            raise
+
+        self.order_persistence.save_return_order_shiprocket_ids(
+            vstitch_return_order_id, response.get("order_id"), response.get("shipment_id"), "shiprocket-integration"
+        )
+        return vstitch_return_order_id, response
+
+    def _cancel_return_claim_best_effort(self, vstitch_return_order_id):
+        """Frees a just-claimed return/replace slot after its Shiprocket
+        call failed, so the order isn't left permanently blocked by a
+        failed attempt. Never raises: this runs inside an except block
+        that's about to re-raise the real (Shiprocket) failure, and a
+        problem freeing the claim must not replace or mask that error -
+        it's logged instead, leaving a stuck 'requested' row as the only
+        symptom for ops to clean up manually in the rare case this itself
+        fails.
+        """
+        try:
+            self.order_persistence.cancel_return_order_claim(vstitch_return_order_id, "shiprocket-integration")
+        except Exception:
+            logger.exception(
+                "Failed to release return/replace claim %s after its Shiprocket call failed - it will "
+                "remain 'requested' and block new requests for its order until cleaned up manually.",
+                vstitch_return_order_id,
+            )
+
+    def _assert_return_replace_eligible(self, order, vstitch_order_id):
+        """Raises ValueError unless the order has been delivered for at
+        least RETURN_REPLACE_ELIGIBILITY_DAYS. Always reads delivered_date
+        fresh off the order dict just fetched from the DB (get_order_for_
+        tracking) - never a client-supplied value or a stale value cached
+        from an earlier GET /orders response."""
+        delivered_date = order.get("delivered_date")
+        if delivered_date is None:
+            raise ValueError(f"Order {vstitch_order_id} has no recorded delivery date yet - nothing to return.")
+        eligible_from = delivered_date + timedelta(days=RETURN_REPLACE_ELIGIBILITY_DAYS)
+        # datetime.utcnow() (naive), not datetime.now(timezone.utc) (aware):
+        # DeliveredDate is a plain TIMESTAMP (no time zone) column, so
+        # psycopg2 returns delivered_date as a naive datetime already in
+        # server-UTC terms - comparing it against an aware datetime would
+        # raise TypeError, not just be wrong.
+        if datetime.utcnow() < eligible_from:
+            raise ValueError(
+                f"Order {vstitch_order_id} becomes eligible for return/replace on "
+                f"{eligible_from.strftime('%Y-%m-%d')} ({RETURN_REPLACE_ELIGIBILITY_DAYS} days after delivery)."
+            )
+
+    def _assert_no_open_return_request(self, vstitch_order_id):
+        """Raises ValueError if a return/replace request is already open
+        against this order - prevents a duplicate Shiprocket return-pickup
+        shipment from being filed by a double-click or resubmission."""
+        open_request = self.order_persistence.find_open_return_request_for_order(vstitch_order_id)
+        if open_request is not None:
+            raise ValueError(
+                f"Order {vstitch_order_id} already has a {open_request['request_type']} request "
+                f"(status: {open_request['status']}) in progress."
+            )
+
+    def _swap_to_return_pickup_shape(self, payload):
+        """Mutates a Shiprocket adhoc-order-shape payload in place, swapping
+        pickup/delivery so the customer's address becomes the pickup point
+        and our own pickup location becomes the delivery destination - the
+        shape both create_return and create_replace file with Shiprocket.
+        Known limitation, left as-is: shipping_address is only a location-
+        name string with no city/state/pincode override for the warehouse
+        destination.
+        """
+        payload["pickup_customer_name"] = payload.pop("billing_customer_name")
+        payload["pickup_last_name"] = payload.pop("billing_last_name")
+        payload["pickup_address"] = payload.pop("billing_address")
+        payload["pickup_city"] = payload.pop("billing_city")
+        payload["pickup_pincode"] = payload.pop("billing_pincode")
+        payload["pickup_state"] = payload.pop("billing_state")
+        payload["pickup_country"] = payload.pop("billing_country")
+        payload["pickup_email"] = payload.pop("billing_email")
+        payload["pickup_phone"] = payload.pop("billing_phone")
+        payload["shipping_customer_name"] = "VStitch Warehouse"
+        payload["shipping_address"] = self.pickup_location
+        payload.pop("shipping_is_billing", None)
+        payload.pop("billing_address_2", None)
+        return payload
 
     # --- Fulfillment / ops (internal, not customer-facing) -----------------
 

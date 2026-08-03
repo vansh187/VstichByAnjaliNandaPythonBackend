@@ -206,8 +206,15 @@ class OrderService:
                 shipping_phone_number=order_row["shipping_phone_number"],
                 created_date=order_row["created_date"],
                 awb_code=order_row["awb_code"],
+                delivered_date=order_row["delivered_date"],
+                # can_replace mirrors can_return today (same 7-day-since-
+                # delivery gate) - this is the one line to change if the two
+                # windows are ever meant to diverge.
+                can_return=order_row["return_eligible"],
+                can_replace=order_row["return_eligible"],
                 items=[
                     OrderItemResponseDTO(
+                        vstitch_order_item_id=item["vstitch_order_item_id"],
                         vstitch_product_variant_id=item["vstitch_product_variant_id"],
                         product_name=item["product_name"],
                         size=item["size"],

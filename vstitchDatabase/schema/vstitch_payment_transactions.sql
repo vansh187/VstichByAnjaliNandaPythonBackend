@@ -14,11 +14,18 @@ CREATE TABLE IF NOT EXISTS VStitch_PaymentTransactions (
     RazorpayOrderId              VARCHAR(250)  NOT NULL,
     RazorpayPaymentId            VARCHAR(250),
     RazorpaySignature            VARCHAR(500),
+    -- 'refund_pending' sits between 'captured' and 'refunded' - set once a
+    -- refund has been requested at Razorpay (return/replace reaching
+    -- 'completed') but before its refund.processed webhook confirms
+    -- completion. Added by migrations/0011_add_refund_tracking.sql.
     PaymentStatus                VARCHAR(20)   NOT NULL DEFAULT 'created'
-                                     CHECK (PaymentStatus IN ('created', 'authorized', 'captured', 'failed', 'refunded')),
+                                     CHECK (PaymentStatus IN ('created', 'authorized', 'captured', 'failed', 'refund_pending', 'refunded')),
     Amount                       NUMERIC(10,2) NOT NULL CHECK (Amount >= 0),
     Currency                     VARCHAR(10)   NOT NULL DEFAULT 'INR',
     FailureReason                VARCHAR(500),
+    RazorpayRefundId              VARCHAR(250),
+    RefundedAmount                NUMERIC(10,2),
+    RefundedAt                    TIMESTAMP,
     created_by                   VARCHAR(250)  NOT NULL,
     created_date                 TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by                   VARCHAR(250),

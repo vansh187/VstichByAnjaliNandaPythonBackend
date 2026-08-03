@@ -3,9 +3,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from starlette.concurrency import run_in_threadpool
 
-from vstitchDTO.shipmentRequestDTO import CreateReturnRequestDTO
-from vstitchDTO.shipmentResponseDTO import CancelOrderResponseDTO, CreateReturnResponseDTO
+from vstitchDTO.shipmentRequestDTO import CreateReplaceRequestDTO, CreateReturnRequestDTO
+from vstitchDTO.shipmentResponseDTO import CancelOrderResponseDTO, CreateReplaceResponseDTO, CreateReturnResponseDTO
 from vstitchServices.authDependency import get_current_user
+from vstitchServices.rateLimiter import limiter
 from vstitchServices.shipmentService import ShipmentService
 from vstitchServices.shiprocketWebhookAuthDependency import require_shiprocket_webhook_key
 
@@ -39,9 +40,16 @@ class ShipmentApi:
         )
         self.router.add_api_route(
             "/orders/{vstitch_order_id}/return",
-            self.create_return,
+            self._build_create_return_route(),
             methods=["POST"],
             response_model=CreateReturnResponseDTO,
+            status_code=201,
+        )
+        self.router.add_api_route(
+            "/orders/{vstitch_order_id}/replace",
+            self._build_create_replace_route(),
+            methods=["POST"],
+            response_model=CreateReplaceResponseDTO,
             status_code=201,
         )
         self.router.add_api_route(
@@ -107,26 +115,74 @@ class ShipmentApi:
             )
         return CancelOrderResponseDTO(vstitch_order_id=vstitch_order_id, message="Order cancelled.")
 
-    def create_return(
-        self,
-        create_return_request_dto: CreateReturnRequestDTO,
-        vstitch_order_id: int = Path(..., ge=1),
-        current_user: dict = Depends(get_current_user),
-    ):
-        try:
-            vstitch_return_order_id, shiprocket_response = ShipmentService().create_return(
-                vstitch_order_id, current_user["vstitch_user_id"], create_return_request_dto.reason
+    def _build_create_return_route(self):
+        # A plain closure, not a bound instance method: slowapi's @limiter.limit
+        # inspects the decorated function's own parameter list to find
+        # "request" by position, then indexes into the raw call args by that
+        # position at request time. A bound method's descriptor protocol
+        # sneaks `self` into that positional args tuple, which desyncs it
+        # from the "request" position slowapi computed from the *unbound*
+        # signature - see loginapi.py's _build_login_route for the full
+        # rationale (same pattern, reused here since this route now also
+        # needs a bespoke rate limit rather than only the global default).
+        #
+        # Rate limited: 10/minute per client IP - this endpoint calls out to
+        # Shiprocket (cost/abuse surface), unlike most customer read endpoints
+        # which rely solely on the global 200/minute default.
+        @limiter.limit("10/minute")
+        def create_return(
+            create_return_request_dto: CreateReturnRequestDTO,
+            request: Request,
+            vstitch_order_id: int = Path(..., ge=1),
+            current_user: dict = Depends(get_current_user),
+        ):
+            try:
+                vstitch_return_order_id, shiprocket_response = ShipmentService().create_return(
+                    vstitch_order_id, current_user["vstitch_user_id"], create_return_request_dto.reason
+                )
+            except ValueError as validation_error:
+                raise HTTPException(status_code=409, detail=str(validation_error))
+            except Exception:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Something went wrong while creating your return. Please try again.",
+                )
+            return CreateReturnResponseDTO(
+                vstitch_return_order_id=vstitch_return_order_id, shiprocket_response=shiprocket_response
             )
-        except ValueError as validation_error:
-            raise HTTPException(status_code=409, detail=str(validation_error))
-        except Exception:
-            raise HTTPException(
-                status_code=502,
-                detail="Something went wrong while creating your return. Please try again.",
+
+        return create_return
+
+    def _build_create_replace_route(self):
+        # Same closure + rate-limit pattern as _build_create_return_route,
+        # and for the same reason (Shiprocket-cost abuse surface).
+        @limiter.limit("10/minute")
+        def create_replace(
+            create_replace_request_dto: CreateReplaceRequestDTO,
+            request: Request,
+            vstitch_order_id: int = Path(..., ge=1),
+            current_user: dict = Depends(get_current_user),
+        ):
+            try:
+                vstitch_return_order_id, shiprocket_response = ShipmentService().create_replace(
+                    vstitch_order_id,
+                    current_user["vstitch_user_id"],
+                    create_replace_request_dto.issue_category,
+                    create_replace_request_dto.reason,
+                    [item.model_dump() for item in create_replace_request_dto.items],
+                )
+            except ValueError as validation_error:
+                raise HTTPException(status_code=409, detail=str(validation_error))
+            except Exception:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Something went wrong while creating your replacement request. Please try again.",
+                )
+            return CreateReplaceResponseDTO(
+                vstitch_return_order_id=vstitch_return_order_id, shiprocket_response=shiprocket_response
             )
-        return CreateReturnResponseDTO(
-            vstitch_return_order_id=vstitch_return_order_id, shiprocket_response=shiprocket_response
-        )
+
+        return create_replace
 
     # Shiprocket delivers tracking events here (Settings -> API -> Webhooks,
     # URL = this endpoint, with the same secret as SHIPROCKET_WEBHOOK_API_KEY
