@@ -21,7 +21,7 @@ def customization_interest_service():
 
 @pytest.fixture(autouse=True)
 def admin_email_env(monkeypatch):
-    monkeypatch.setenv("VSTITCH_RESEND_EMAIL", "admin@example.com")
+    monkeypatch.setenv("VSTITCH_ADMIN_NOTIFICATION_EMAIL", "admin@example.com")
 
 
 def test_saves_lead_and_sends_email_on_success(customization_interest_service):
@@ -74,7 +74,7 @@ def test_raises_customization_interest_email_error_when_resend_not_configured(cu
 def test_raises_customization_interest_email_error_when_admin_email_env_missing(
     customization_interest_service, monkeypatch
 ):
-    monkeypatch.delenv("VSTITCH_RESEND_EMAIL", raising=False)
+    monkeypatch.delenv("VSTITCH_ADMIN_NOTIFICATION_EMAIL", raising=False)
 
     with patch("vstitchServices.customizationInterestService.ResendEmailClient") as mock_client_cls:
         with pytest.raises(CustomizationInterestEmailError):

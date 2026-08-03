@@ -46,7 +46,7 @@ def order_email_service():
 
 @pytest.fixture(autouse=True)
 def admin_email_env(monkeypatch):
-    monkeypatch.setenv("VSTITCH_RESEND_EMAIL", "admin@example.com")
+    monkeypatch.setenv("VSTITCH_ADMIN_NOTIFICATION_EMAIL", "admin@example.com")
 
 
 def test_sends_both_emails_on_success(order_email_service):
@@ -97,7 +97,7 @@ def test_admin_email_still_sent_when_customer_email_fails(order_email_service):
 
 
 def test_admin_email_skipped_when_env_var_missing(order_email_service, monkeypatch):
-    monkeypatch.delenv("VSTITCH_RESEND_EMAIL", raising=False)
+    monkeypatch.delenv("VSTITCH_ADMIN_NOTIFICATION_EMAIL", raising=False)
     order_email_service.order_persistence.get_order_for_confirmation_email.return_value = SAMPLE_ORDER
 
     with patch("vstitchServices.orderEmailService.ResendEmailClient") as mock_client_cls:

@@ -65,11 +65,17 @@ class CustomizationInterestService:
             )
 
     def _send_admin_notification(self, request_dto):
-        admin_email = os.getenv("VSTITCH_RESEND_EMAIL")
+        # VSTITCH_ADMIN_NOTIFICATION_EMAIL, deliberately separate from
+        # VSTITCH_RESEND_EMAIL (the Resend "from" sender, which must be on
+        # a domain verified with Resend) - see the matching comment in
+        # OrderEmailService._send_admin_email for why conflating the two
+        # silently sent every admin notification to a send-only noreply@
+        # address instead of the studio's actual inbox.
+        admin_email = os.getenv("VSTITCH_ADMIN_NOTIFICATION_EMAIL")
         if not admin_email:
             logger.error(
-                "VSTITCH_RESEND_EMAIL is not configured - cannot send the customization-interest "
-                "notification email for %s.",
+                "VSTITCH_ADMIN_NOTIFICATION_EMAIL is not configured - cannot send the "
+                "customization-interest notification email for %s.",
                 request_dto.email,
             )
             raise CustomizationInterestEmailError("Admin notification email is not configured.")

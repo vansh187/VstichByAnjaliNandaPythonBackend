@@ -93,17 +93,22 @@ class OrderEmailService:
             )
 
     def _send_admin_email(self, order):
-        # VSTITCH_RESEND_EMAIL, not VSTITCH_SHIPMENT_EMAIL: the latter is the
-        # Shiprocket account login (see shiprocketClient.py) - an unrelated
-        # credential that happens to share a value with this address today,
-        # not the admin notification inbox. VSTITCH_RESEND_EMAIL is both the
-        # Resend "from" sender and the studio's own inbox, per how it's
-        # configured for this account.
-        admin_email = os.getenv("VSTITCH_RESEND_EMAIL")
+        # VSTITCH_ADMIN_NOTIFICATION_EMAIL, deliberately separate from
+        # VSTITCH_RESEND_EMAIL (the Resend "from" sender): the two used to
+        # be the same env var on the assumption they'd always share one
+        # value, but VSTITCH_RESEND_EMAIL must be on a domain verified with
+        # Resend (e.g. noreply@vstitchbyanjalinanda.com) while the studio's
+        # actual inbox is a plain Gmail address - conflating them meant
+        # admin notifications were silently being sent to the send-only
+        # noreply@ address (which Resend correctly refuses to even attempt
+        # delivering to - status "suppressed") instead of the inbox anyone
+        # actually checks. Also not VSTITCH_SHIPMENT_EMAIL - that's the
+        # unrelated Shiprocket account login (see shiprocketClient.py).
+        admin_email = os.getenv("VSTITCH_ADMIN_NOTIFICATION_EMAIL")
         if not admin_email:
             logger.warning(
-                "VSTITCH_RESEND_EMAIL is not configured - admin order-notification email skipped for "
-                "order %s.",
+                "VSTITCH_ADMIN_NOTIFICATION_EMAIL is not configured - admin order-notification email "
+                "skipped for order %s.",
                 order["vstitch_order_id"],
             )
             return
