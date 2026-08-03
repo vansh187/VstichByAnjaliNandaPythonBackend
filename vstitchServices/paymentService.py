@@ -5,6 +5,7 @@ import uuid
 
 from vstitchDatabase.paymentPersistence import PaymentPersistence
 from vstitchDTO.paymentResponseDTO import CreatePaymentOrderResponseDTO
+from vstitchServices.orderEmailService import OrderEmailService
 from vstitchServices.orderService import OrderService
 from vstitchServices.razorpayClient import razorpay_client, to_paise
 from vstitchServices.shipmentService import ShipmentService
@@ -112,6 +113,7 @@ class PaymentService:
             # to ship.
             if vstitch_order_id is not None:
                 self._create_shipment(vstitch_order_id)
+                self._send_order_confirmation_emails(vstitch_order_id)
         elif event_type in FAILURE_EVENT_TYPES and razorpay_order_id:
             failure_reason = payment_entity.get("error_description") or "Payment failed."
             self.payment_persistence.mark_payment_failed(
@@ -223,5 +225,21 @@ class PaymentService:
             logger.exception(
                 "Shiprocket shipment creation failed for VStitch order %s - payment/order state is "
                 "unaffected, but this order will need its shipment created manually.",
+                vstitch_order_id,
+            )
+
+    def _send_order_confirmation_emails(self, vstitch_order_id):
+        """Sends the customer order-confirmation + admin packing-notification
+        emails for a just-captured Razorpay order. Same never-raise
+        rationale as _create_shipment above: OrderEmailService already
+        isolates each of its own internal steps, but this call site is
+        wrapped too so an unanticipated bug in the email path can never
+        turn a successful webhook delivery into a non-2xx response.
+        """
+        try:
+            OrderEmailService().send_order_confirmation_emails(vstitch_order_id)
+        except Exception:
+            logger.exception(
+                "Order confirmation emails failed for VStitch order %s - payment/order state is unaffected.",
                 vstitch_order_id,
             )

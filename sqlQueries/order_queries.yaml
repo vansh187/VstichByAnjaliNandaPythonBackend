@@ -234,6 +234,23 @@ get_order_items_for_shipment: |
   WHERE oi.VstitchOrderId = %s
   ORDER BY oi.VstitchOrderItemId;
 
+get_order_items_for_confirmation_email: |
+  -- Unlike get_order_items_for_shipment (which only needs Sku/dimensions),
+  -- the admin order-notification email needs VstitchProductId and
+  -- VstitchProductVariantId explicitly (so admin staff can look up/pack the
+  -- exact item from the id alone) - no other existing order-items query
+  -- returns both ids together. LEFT JOIN, not JOIN: VstitchProductVariantId
+  -- is ON DELETE SET NULL (see OrderItemResponseDTO's docstring), so a
+  -- variant deleted after the order was placed must not make the whole
+  -- email-preparation query fail - VstitchProductId/Sku just come back NULL
+  -- for that line, which the email template renders as "N/A".
+  SELECT oi.VstitchOrderItemId, oi.VstitchProductVariantId, pv.VstitchProductId, oi.ProductNameSnapshot,
+         oi.SizeSnapshot, oi.ColorSnapshot, oi.UnitPriceSnapshot, oi.Quantity, pv.Sku
+  FROM VStitch_OrderItems oi
+  LEFT JOIN VStitch_ProductVariants pv ON pv.VstitchProductVariantId = oi.VstitchProductVariantId
+  WHERE oi.VstitchOrderId = %s
+  ORDER BY oi.VstitchOrderItemId;
+
 save_shiprocket_shipment_ids: |
   UPDATE VStitch_Orders
   SET ShiprocketOrderId = %(shiprocket_order_id)s,

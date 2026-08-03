@@ -8,6 +8,7 @@ from vstitchDTO.orderResponseDTO import (
     OrderListResponseDTO,
 )
 from vstitchServices.localCacheService import local_cache_service
+from vstitchServices.orderEmailService import OrderEmailService
 from vstitchServices.shipmentService import ShipmentService
 
 logger = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ class OrderService:
 
         self.evict_sold_out_products_from_cache(order_items, remaining_stock_by_variant_id)
         self._create_shipment(vstitch_order_id)
+        self._send_order_confirmation_emails(vstitch_order_id)
 
         return CreateOrderResponseDTO(
             vstitch_order_id=vstitch_order_id,
@@ -132,6 +134,22 @@ class OrderService:
             logger.exception(
                 "Shiprocket shipment creation failed for VStitch order %s - order/stock state is "
                 "unaffected, but this order will need its shipment created manually.",
+                vstitch_order_id,
+            )
+
+    def _send_order_confirmation_emails(self, vstitch_order_id):
+        """Sends the customer order-confirmation + admin packing-notification
+        emails for a just-placed COD order. Never raises: OrderEmailService
+        already isolates each of its own internal steps, but this call site
+        is wrapped too (same defense-in-depth as _create_shipment above) so
+        an unanticipated bug in the email path can never turn a successful
+        order placement into a 500 for the customer.
+        """
+        try:
+            OrderEmailService().send_order_confirmation_emails(vstitch_order_id)
+        except Exception:
+            logger.exception(
+                "Order confirmation emails failed for VStitch order %s - order/stock state is unaffected.",
                 vstitch_order_id,
             )
 
