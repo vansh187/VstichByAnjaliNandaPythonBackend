@@ -385,6 +385,60 @@ class OrderPersistence:
             order["items"] = [dict(zip(item_column_names, row)) for row in item_rows]
             return order
 
+    def get_order_for_confirmation_email(self, vstitch_order_id):
+        """Fetches everything the order-confirmation emails (customer + admin)
+        need: the same header shape as get_order_for_shipment, plus items
+        that carry VstitchProductId/VstitchProductVariantId/Sku explicitly -
+        the admin packing email needs those ids directly, unlike the
+        Shiprocket shipment payload which only needs Sku/dimensions. Returns
+        None if the order doesn't exist.
+        """
+        with self.connection_factory.connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    self.query_loader.get_query("get_order_header_for_shipment"),
+                    (vstitch_order_id,),
+                )
+                header_row = cursor.fetchone()
+                if header_row is None:
+                    return None
+
+                cursor.execute(
+                    self.query_loader.get_query("get_order_items_for_confirmation_email"),
+                    (vstitch_order_id,),
+                )
+                item_rows = cursor.fetchall()
+
+            header_column_names = (
+                "vstitch_order_id",
+                "payment_method",
+                "total_amount",
+                "shipping_recipient_name",
+                "shipping_address_line1",
+                "shipping_address_line2",
+                "shipping_city",
+                "shipping_state",
+                "shipping_postal_code",
+                "shipping_country",
+                "shipping_phone_number",
+                "created_date",
+                "email",
+            )
+            item_column_names = (
+                "vstitch_order_item_id",
+                "vstitch_product_variant_id",
+                "vstitch_product_id",
+                "product_name",
+                "size",
+                "color",
+                "unit_price",
+                "quantity",
+                "sku",
+            )
+            order = dict(zip(header_column_names, header_row))
+            order["items"] = [dict(zip(item_column_names, row)) for row in item_rows]
+            return order
+
     def save_shiprocket_shipment_ids(self, vstitch_order_id, shiprocket_order_id, shiprocket_shipment_id, updated_by):
         with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:

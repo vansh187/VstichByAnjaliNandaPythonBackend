@@ -1,0 +1,4 @@
+insert_customization_interest_lead: |
+  INSERT INTO VSTITCH_CUSTOMIZED_USER (CustomerName, CustomerPhone, CustomerEmail, created_by)
+  VALUES (%(customer_name)s, %(customer_phone)s, %(customer_email)s, %(created_by)s)
+  RETURNING VstitchCustomizedUserId;

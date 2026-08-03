@@ -1,10 +1,12 @@
 import hashlib
 import json
 import logging
+import threading
 import uuid
 
 from vstitchDatabase.paymentPersistence import PaymentPersistence
 from vstitchDTO.paymentResponseDTO import CreatePaymentOrderResponseDTO
+from vstitchServices.orderEmailService import OrderEmailService
 from vstitchServices.orderService import OrderService
 from vstitchServices.razorpayClient import razorpay_client, to_paise
 from vstitchServices.shipmentService import ShipmentService
@@ -112,6 +114,7 @@ class PaymentService:
             # to ship.
             if vstitch_order_id is not None:
                 self._create_shipment(vstitch_order_id)
+                self._send_order_confirmation_emails(vstitch_order_id)
         elif event_type in FAILURE_EVENT_TYPES and razorpay_order_id:
             failure_reason = payment_entity.get("error_description") or "Payment failed."
             self.payment_persistence.mark_payment_failed(
@@ -225,3 +228,29 @@ class PaymentService:
                 "unaffected, but this order will need its shipment created manually.",
                 vstitch_order_id,
             )
+
+    def _send_order_confirmation_emails(self, vstitch_order_id):
+        """Fires the customer order-confirmation + admin packing-notification
+        emails for a just-captured Razorpay order on a background thread,
+        not inline - same rationale as OrderService._send_order_
+        confirmation_emails: PDF generation plus two sequential Resend HTTP
+        calls (each with its own 10s timeout) must not add to this
+        webhook's own response time, or a slow Resend risks Razorpay
+        treating the delivery as failed and retrying it.
+
+        Never raises into the caller either way: OrderEmailService already
+        isolates each of its own internal steps, and the thread target
+        below is wrapped too so an unanticipated bug in the email path can
+        never turn a successful webhook delivery into a non-2xx response.
+        """
+
+        def _send():
+            try:
+                OrderEmailService().send_order_confirmation_emails(vstitch_order_id)
+            except Exception:
+                logger.exception(
+                    "Order confirmation emails failed for VStitch order %s - payment/order state is unaffected.",
+                    vstitch_order_id,
+                )
+
+        threading.Thread(target=_send, daemon=True).start()
