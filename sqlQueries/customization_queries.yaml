@@ -1,0 +1,38 @@
+variant_belongs_to_product: |
+  -- Confirms the variant actually belongs to the given product in one
+  -- round trip - a missing row here means "product doesn't exist, variant
+  -- doesn't exist, or variant belongs to a different product", and the
+  -- caller deliberately returns the same 404 for all three (anti-
+  -- enumeration, same pattern as OrderPersistence.get_order_items_by_ids_for_order).
+  -- Existence-only (SELECT 1), not a full row: the only caller checks
+  -- whether a row came back, nothing else - no product/variant display
+  -- fields are needed here (get_customization_requests_for_user below is
+  -- what actually joins those in, for the one caller that uses them).
+  SELECT 1
+  FROM VStitch_ProductVariants pv
+  WHERE pv.VstitchProductVariantId = %(vstitch_product_variant_id)s
+    AND pv.VstitchProductId = %(vstitch_product_id)s;
+
+insert_customization_request: |
+  INSERT INTO VStitch_CustomizationRequests
+      (VstitchProductId, VstitchProductVariantId, VstitchUserId, CustomerName, CustomerPhone,
+       BustIn, WaistIn, HipsIn, ShoulderIn, SleeveLengthIn, DressLengthIn, Notes, created_by)
+  VALUES
+      (%(vstitch_product_id)s, %(vstitch_product_variant_id)s, %(vstitch_user_id)s, %(customer_name)s,
+       %(customer_phone)s, %(bust_in)s, %(waist_in)s, %(hips_in)s, %(shoulder_in)s, %(sleeve_length_in)s,
+       %(dress_length_in)s, %(notes)s, %(created_by)s)
+  RETURNING VstitchCustomizationRequestId, VstitchProductId, VstitchProductVariantId, Status, created_date;
+
+get_customization_requests_for_user: |
+  -- Newest-first, same "join the display fields the list needs" shape as
+  -- OrderPersistence.get_order_for_shipment's item query - avoids a second
+  -- round trip per row to resolve product/variant display names.
+  SELECT cr.VstitchCustomizationRequestId, cr.VstitchProductId, cr.VstitchProductVariantId,
+         p.ProductName, pv.Size, pv.Color, cr.CustomerName, cr.CustomerPhone,
+         cr.BustIn, cr.WaistIn, cr.HipsIn, cr.ShoulderIn, cr.SleeveLengthIn, cr.DressLengthIn,
+         cr.Notes, cr.Status, cr.created_date
+  FROM VStitch_CustomizationRequests cr
+  JOIN VStitch_Products p ON p.VstitchProductId = cr.VstitchProductId
+  JOIN VStitch_ProductVariants pv ON pv.VstitchProductVariantId = cr.VstitchProductVariantId
+  WHERE cr.VstitchUserId = %(vstitch_user_id)s
+  ORDER BY cr.VstitchCustomizationRequestId DESC;
