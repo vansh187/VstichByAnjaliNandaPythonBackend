@@ -330,7 +330,7 @@ Product images: multiple per product (repeatable upload slots, each
 feeding one entry of the existing `images: [{ image_url, is_primary,
 display_order }]` array on `POST /admin/products`).
 
-Accepted file types: JPG, PNG, WEBP. Max size: 5 MB. The uploaded image
+Accepted file types: JPG, PNG, WEBP. Max size: 10 MB. The uploaded image
 is converted to WebP and downsized server-side before storage - the
 returned URL always ends in `.webp` regardless of the uploaded format.
 
@@ -348,7 +348,7 @@ file too large, or unreadable image data)
 { "detail": "Only JPG, PNG, or WEBP images are allowed." }
 ```
 ```json
-{ "detail": "Image must be smaller than 5MB." }
+{ "detail": "Image must be smaller than 10MB." }
 ```
 
 **Response `401`** - same shape as every other admin endpoint.
