@@ -1,0 +1,7 @@
+insert_subscriber: |
+  INSERT INTO VSTITCH_SUBSCRIBERS (Email, created_by, updated_by)
+  VALUES (%(email)s, %(created_by)s, %(updated_by)s)
+  ON CONFLICT (Email) DO UPDATE
+    SET updated_by = EXCLUDED.updated_by,
+        updated_date = CURRENT_TIMESTAMP
+  RETURNING VstitchSubscriberId, Email, created_date, updated_date;
