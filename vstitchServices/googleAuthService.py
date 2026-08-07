@@ -1,8 +1,10 @@
 import os
 import re
 import secrets
+from urllib.parse import urlencode
 
 import psycopg2.errors
+import requests
 from dotenv import load_dotenv
 from google.auth.exceptions import GoogleAuthError
 from google.auth.transport import requests as google_requests
@@ -15,6 +17,8 @@ from vstitchServices.jwtTokenService import JwtTokenService
 load_dotenv()
 
 USERNAME_SANITIZE_PATTERN = re.compile(r"[^a-z0-9_]")
+GOOGLE_AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
 
 class GoogleAuthService:
@@ -33,10 +37,70 @@ class GoogleAuthService:
         self.google_auth_request = google_requests.Request()
         if not self.google_client_id:
             raise ValueError("GOOGLE_CLIENT_ID must be configured in the environment.")
+        # Only required for the server-driven authorization-code redirect
+        # flow (build_authorization_url / authenticate_with_code) - checked
+        # lazily in those methods rather than here, so a deployment that
+        # only uses the legacy GSI id_token flow (authenticate_with_google)
+        # doesn't fail to start without them.
+        self.google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+        self.google_oauth_redirect_uri = os.getenv("GOOGLE_OAUTH_REDIRECT_URI")
 
     def authenticate_with_google(self, google_login_request_dto):
         payload = self._verify_id_token(google_login_request_dto.id_token)
+        return self._authenticate_from_payload(payload)
 
+    def build_authorization_url(self, state):
+        """Builds the Google OAuth 2.0 consent-screen URL for the
+        authorization-code redirect flow. `state` is the caller-generated
+        CSRF token, expected back unchanged on the callback."""
+        if not self.google_oauth_redirect_uri:
+            raise ValueError("GOOGLE_OAUTH_REDIRECT_URI must be configured in the environment.")
+        query_params = {
+            "client_id": self.google_client_id,
+            "redirect_uri": self.google_oauth_redirect_uri,
+            "response_type": "code",
+            "scope": "openid email profile",
+            "access_type": "offline",
+            "prompt": "select_account",
+            "state": state,
+        }
+        return f"{GOOGLE_AUTHORIZATION_ENDPOINT}?{urlencode(query_params)}"
+
+    def authenticate_with_code(self, authorization_code):
+        """Exchanges an authorization code for tokens server-side, verifies
+        the returned id_token, and signs the user in - the callback-side
+        half of the redirect flow started by build_authorization_url."""
+        id_token_value = self._exchange_code_for_id_token(authorization_code)
+        payload = self._verify_id_token(id_token_value)
+        return self._authenticate_from_payload(payload)
+
+    def _exchange_code_for_id_token(self, authorization_code):
+        if not self.google_client_secret or not self.google_oauth_redirect_uri:
+            raise ValueError("Google sign-in is not fully configured on the server.")
+        try:
+            token_response = requests.post(
+                GOOGLE_TOKEN_ENDPOINT,
+                data={
+                    "code": authorization_code,
+                    "client_id": self.google_client_id,
+                    "client_secret": self.google_client_secret,
+                    "redirect_uri": self.google_oauth_redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                timeout=10,
+            )
+        except requests.RequestException as request_error:
+            raise ValueError("Could not reach Google to complete sign-in. Please try again.") from request_error
+
+        if token_response.status_code != 200:
+            raise ValueError("Google rejected the sign-in request. Please try again.")
+
+        id_token_value = token_response.json().get("id_token")
+        if not id_token_value:
+            raise ValueError("Google did not return a valid credential. Please try again.")
+        return id_token_value
+
+    def _authenticate_from_payload(self, payload):
         google_id = payload.get("sub")
         email = payload.get("email")
         email_verified = payload.get("email_verified", False)
