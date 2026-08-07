@@ -34,6 +34,7 @@ from vstitchapi.shipmentApi import shipment_router
 from vstitchapi.shipmentOpsApi import shipment_ops_router
 from vstitchapi.signupapi import signup_router
 from vstitchapi.subscriberApi import subscriber_router
+from vstitchapi.userLocationApi import user_location_router
 from vstitchDatabase.schemaPersistence import SchemaPersistence
 
 # Root config for every module-level `logging.getLogger(__name__)` in the
@@ -108,6 +109,7 @@ app.include_router(shipment_ops_router)
 app.include_router(customization_request_router)
 app.include_router(customization_interest_router)
 app.include_router(subscriber_router)
+app.include_router(user_location_router)
 app.include_router(admin_auth_router)
 app.include_router(admin_audit_log_router)
 app.include_router(admin_order_router)
