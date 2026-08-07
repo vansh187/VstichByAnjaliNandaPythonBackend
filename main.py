@@ -26,6 +26,7 @@ from vstitchapi.customizationRequestApi import customization_request_router
 from vstitchapi.googleAuthApi import google_auth_router
 from vstitchapi.loginapi import login_router
 from vstitchapi.orderapi import order_router
+from vstitchapi.passwordResetApi import password_reset_router
 from vstitchapi.paymentApi import payment_router
 from vstitchapi.productapi import product_router
 from vstitchapi.reviewApi import review_router
@@ -94,6 +95,7 @@ app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(signup_router)
 app.include_router(login_router)
+app.include_router(password_reset_router)
 app.include_router(google_auth_router)
 app.include_router(order_router)
 app.include_router(payment_router)
