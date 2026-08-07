@@ -7,7 +7,7 @@ import requests
 from PIL import Image
 
 ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
-MAX_UPLOAD_SIZE_BYTES = 5 * 1024 * 1024
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024
 FOLDER_BY_IMAGE_TYPE = {"category": "categories", "product": "products"}
 BUCKET_NAME = "VStitch-catalogue-images"
 UPLOAD_REQUEST_TIMEOUT_SECONDS = 30
@@ -82,7 +82,7 @@ class SupabaseStorageService:
         if content_type not in ALLOWED_CONTENT_TYPES:
             raise ValueError("Only JPG, PNG, or WEBP images are allowed.")
         if len(file_bytes) > MAX_UPLOAD_SIZE_BYTES:
-            raise ValueError("Image must be smaller than 5MB.")
+            raise ValueError("Image must be smaller than 10MB.")
 
         webp_bytes = compress_to_webp(file_bytes)
         storage_path = f"{FOLDER_BY_IMAGE_TYPE[image_type]}/{uuid.uuid4().hex}.webp"

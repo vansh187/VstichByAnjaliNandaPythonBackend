@@ -26,12 +26,14 @@ from vstitchapi.customizationRequestApi import customization_request_router
 from vstitchapi.googleAuthApi import google_auth_router
 from vstitchapi.loginapi import login_router
 from vstitchapi.orderapi import order_router
+from vstitchapi.passwordResetApi import password_reset_router
 from vstitchapi.paymentApi import payment_router
 from vstitchapi.productapi import product_router
 from vstitchapi.reviewApi import review_router
 from vstitchapi.shipmentApi import shipment_router
 from vstitchapi.shipmentOpsApi import shipment_ops_router
 from vstitchapi.signupapi import signup_router
+from vstitchapi.subscriberApi import subscriber_router
 from vstitchDatabase.schemaPersistence import SchemaPersistence
 
 # Root config for every module-level `logging.getLogger(__name__)` in the
@@ -93,6 +95,7 @@ app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(signup_router)
 app.include_router(login_router)
+app.include_router(password_reset_router)
 app.include_router(google_auth_router)
 app.include_router(order_router)
 app.include_router(payment_router)
@@ -104,6 +107,7 @@ app.include_router(shipment_router)
 app.include_router(shipment_ops_router)
 app.include_router(customization_request_router)
 app.include_router(customization_interest_router)
+app.include_router(subscriber_router)
 app.include_router(admin_auth_router)
 app.include_router(admin_audit_log_router)
 app.include_router(admin_order_router)
