@@ -36,6 +36,9 @@ class SignupPersistence:
         email,
         phone_number,
         created_by_ip_address,
+        location_permission_granted=None,
+        latitude=None,
+        longitude=None,
     ):
         with self.connection_factory.connection() as connection:
             with connection.cursor() as cursor:
@@ -48,6 +51,9 @@ class SignupPersistence:
                         last_name,
                         email,
                         phone_number,
+                        location_permission_granted,
+                        latitude,
+                        longitude,
                         created_by_ip_address,
                     ),
                 )

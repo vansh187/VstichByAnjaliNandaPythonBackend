@@ -1,9 +1,16 @@
 import re
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from vstitchDTO.coordinatesDTO import CoordinatesDTO
+
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_NUMBER_PATTERN = re.compile(r"^\+?[0-9]{7,15}$")
+
+
+class SignupLocationDTO(CoordinatesDTO):
+    pass
 
 
 class SignupRequestDTO(BaseModel):
@@ -13,6 +20,15 @@ class SignupRequestDTO(BaseModel):
     last_name: str = Field(..., min_length=1, max_length=250)
     email: str = Field(..., min_length=5, max_length=250)
     phone_number: str = Field(..., min_length=7, max_length=250)
+    # Both optional, and deliberately not cross-validated against each
+    # other (e.g. rejecting `location` present without
+    # `location_permission_granted: true`) - the frontend contract never
+    # sends that combination, but an older/replayed client sending only
+    # one of the two must still be accepted and stored as-is rather than
+    # 422ing, per the spec: "treat a request with neither present ... the
+    # same as a denied prompt, not a validation error".
+    location_permission_granted: Optional[bool] = None
+    location: Optional[SignupLocationDTO] = None
 
     @field_validator("email")
     @classmethod

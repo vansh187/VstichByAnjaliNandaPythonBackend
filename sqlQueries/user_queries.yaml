@@ -1,18 +1,21 @@
 create_table: |
   CREATE TABLE IF NOT EXISTS VStitch_Users (
-      VstitchUserId    BIGSERIAL     PRIMARY KEY,
-      VstitchUserName  VARCHAR(250)  NOT NULL,
-      VstitchPassword  VARCHAR(250),
-      FirstName        VARCHAR(250)  NOT NULL,
-      LastName         VARCHAR(250)  NOT NULL,
-      Email            VARCHAR(250)  NOT NULL,
-      PhoneNumber      VARCHAR(250),
-      GoogleId         VARCHAR(250),
-      AuthProvider     VARCHAR(20)   NOT NULL DEFAULT 'local',
-      created_by       VARCHAR(250)  NOT NULL,
-      created_date     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_by       VARCHAR(250),
-      updated_date     TIMESTAMP,
+      VstitchUserId              BIGSERIAL         PRIMARY KEY,
+      VstitchUserName            VARCHAR(250)      NOT NULL,
+      VstitchPassword            VARCHAR(250),
+      FirstName                  VARCHAR(250)      NOT NULL,
+      LastName                   VARCHAR(250)      NOT NULL,
+      Email                      VARCHAR(250)      NOT NULL,
+      PhoneNumber                VARCHAR(250),
+      GoogleId                   VARCHAR(250),
+      AuthProvider               VARCHAR(20)       NOT NULL DEFAULT 'local',
+      LocationPermissionGranted  BOOLEAN,
+      Latitude                   DOUBLE PRECISION,
+      Longitude                  DOUBLE PRECISION,
+      created_by                 VARCHAR(250)      NOT NULL,
+      created_date               TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_by                 VARCHAR(250),
+      updated_date               TIMESTAMP,
 
       CONSTRAINT uq_vstitch_users_username UNIQUE (VstitchUserName),
       CONSTRAINT uq_vstitch_users_email UNIQUE (Email),
@@ -31,9 +34,10 @@ check_phone_exists: |
 
 insert_user: |
   INSERT INTO VStitch_Users
-      (VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber, AuthProvider, created_by, created_date)
+      (VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber, AuthProvider,
+       LocationPermissionGranted, Latitude, Longitude, created_by, created_date)
   VALUES
-      (%s, %s, %s, %s, %s, %s, 'local', %s, CURRENT_TIMESTAMP)
+      (%s, %s, %s, %s, %s, %s, 'local', %s, %s, %s, %s, CURRENT_TIMESTAMP)
   RETURNING VstitchUserId, VstitchUserName, Email, created_date;
 
 get_user_by_username: |
@@ -70,6 +74,19 @@ link_google_id_to_user: |
 update_password_by_user_id: |
   UPDATE VStitch_Users
   SET VstitchPassword = %(new_password_hash)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchUserId = %(vstitch_user_id)s;
+
+update_user_location: |
+  -- Always sets LocationPermissionGranted = TRUE: this query only ever
+  -- runs from POST /users/location, which the frontend only calls once it
+  -- already has real coordinates in hand (permission was granted) - there
+  -- is no "update to denied" case for this endpoint.
+  UPDATE VStitch_Users
+  SET Latitude = %(latitude)s,
+      Longitude = %(longitude)s,
+      LocationPermissionGranted = TRUE,
       updated_by = %(updated_by)s,
       updated_date = CURRENT_TIMESTAMP
   WHERE VstitchUserId = %(vstitch_user_id)s;

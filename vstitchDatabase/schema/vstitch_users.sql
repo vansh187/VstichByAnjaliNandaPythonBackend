@@ -7,21 +7,31 @@
 -- GoogleId is Google's stable `sub` claim, AuthProvider is 'local' or 'google'.
 -- VstitchPassword/PhoneNumber are nullable because a Google-only account never
 -- collects either.
+--
+-- LocationPermissionGranted/Latitude/Longitude (see
+-- migrations/0017_add_user_location.sql) capture the browser geolocation
+-- prompt's result - set at signup if granted, refreshed on every later
+-- login via POST /users/location. All three nullable: denied/dismissed/
+-- unsupported-browser, or an account predating this feature, all mean "no
+-- value", not an error.
 
 CREATE TABLE IF NOT EXISTS VStitch_Users (
-    VstitchUserId    BIGSERIAL     PRIMARY KEY,
-    VstitchUserName  VARCHAR(250)  NOT NULL,
-    VstitchPassword  VARCHAR(250),
-    FirstName        VARCHAR(250)  NOT NULL,
-    LastName         VARCHAR(250)  NOT NULL,
-    Email            VARCHAR(250)  NOT NULL,
-    PhoneNumber      VARCHAR(250),
-    GoogleId         VARCHAR(250),
-    AuthProvider     VARCHAR(20)   NOT NULL DEFAULT 'local',
-    created_by       VARCHAR(250)  NOT NULL,
-    created_date     TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_by       VARCHAR(250),
-    updated_date     TIMESTAMP,
+    VstitchUserId              BIGSERIAL         PRIMARY KEY,
+    VstitchUserName            VARCHAR(250)      NOT NULL,
+    VstitchPassword            VARCHAR(250),
+    FirstName                  VARCHAR(250)      NOT NULL,
+    LastName                   VARCHAR(250)      NOT NULL,
+    Email                      VARCHAR(250)      NOT NULL,
+    PhoneNumber                VARCHAR(250),
+    GoogleId                   VARCHAR(250),
+    AuthProvider               VARCHAR(20)       NOT NULL DEFAULT 'local',
+    LocationPermissionGranted  BOOLEAN,
+    Latitude                   DOUBLE PRECISION,
+    Longitude                  DOUBLE PRECISION,
+    created_by                 VARCHAR(250)      NOT NULL,
+    created_date               TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by                 VARCHAR(250),
+    updated_date               TIMESTAMP,
 
     CONSTRAINT uq_vstitch_users_username UNIQUE (VstitchUserName),
     CONSTRAINT uq_vstitch_users_email UNIQUE (Email),
