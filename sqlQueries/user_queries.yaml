@@ -10,8 +10,7 @@ create_table: |
       GoogleId                   VARCHAR(250),
       AuthProvider               VARCHAR(20)       NOT NULL DEFAULT 'local',
       LocationPermissionGranted  BOOLEAN,
-      Latitude                   DOUBLE PRECISION,
-      Longitude                  DOUBLE PRECISION,
+      GoogleMapsLink              TEXT,
       created_by                 VARCHAR(250)      NOT NULL,
       created_date               TIMESTAMP         NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_by                 VARCHAR(250),
@@ -35,9 +34,9 @@ check_phone_exists: |
 insert_user: |
   INSERT INTO VStitch_Users
       (VstitchUserName, VstitchPassword, FirstName, LastName, Email, PhoneNumber, AuthProvider,
-       LocationPermissionGranted, Latitude, Longitude, created_by, created_date)
+       LocationPermissionGranted, GoogleMapsLink, created_by, created_date)
   VALUES
-      (%s, %s, %s, %s, %s, %s, 'local', %s, %s, %s, %s, CURRENT_TIMESTAMP)
+      (%s, %s, %s, %s, %s, %s, 'local', %s, %s, %s, CURRENT_TIMESTAMP)
   RETURNING VstitchUserId, VstitchUserName, Email, created_date;
 
 get_user_by_username: |
@@ -81,11 +80,10 @@ update_password_by_user_id: |
 update_user_location: |
   -- Always sets LocationPermissionGranted = TRUE: this query only ever
   -- runs from POST /users/location, which the frontend only calls once it
-  -- already has real coordinates in hand (permission was granted) - there
+  -- already has a real Maps link in hand (permission was granted) - there
   -- is no "update to denied" case for this endpoint.
   UPDATE VStitch_Users
-  SET Latitude = %(latitude)s,
-      Longitude = %(longitude)s,
+  SET GoogleMapsLink = %(google_maps_link)s,
       LocationPermissionGranted = TRUE,
       updated_by = %(updated_by)s,
       updated_date = CURRENT_TIMESTAMP

@@ -3,14 +3,10 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from vstitchDTO.coordinatesDTO import CoordinatesDTO
+from vstitchDTO.googleMapsLinkValidator import MAX_GOOGLE_MAPS_LINK_LENGTH, validate_google_maps_link
 
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_NUMBER_PATTERN = re.compile(r"^\+?[0-9]{7,15}$")
-
-
-class SignupLocationDTO(CoordinatesDTO):
-    pass
 
 
 class SignupRequestDTO(BaseModel):
@@ -21,14 +17,14 @@ class SignupRequestDTO(BaseModel):
     email: str = Field(..., min_length=5, max_length=250)
     phone_number: str = Field(..., min_length=7, max_length=250)
     # Both optional, and deliberately not cross-validated against each
-    # other (e.g. rejecting `location` present without
+    # other (e.g. rejecting `google_maps_link` present without
     # `location_permission_granted: true`) - the frontend contract never
     # sends that combination, but an older/replayed client sending only
     # one of the two must still be accepted and stored as-is rather than
     # 422ing, per the spec: "treat a request with neither present ... the
     # same as a denied prompt, not a validation error".
     location_permission_granted: Optional[bool] = None
-    location: Optional[SignupLocationDTO] = None
+    google_maps_link: Optional[str] = Field(default=None, max_length=MAX_GOOGLE_MAPS_LINK_LENGTH)
 
     @field_validator("email")
     @classmethod
@@ -52,3 +48,10 @@ class SignupRequestDTO(BaseModel):
         if len(password_value.encode("utf-8")) > 72:
             raise ValueError("Password must not exceed 72 bytes.")
         return password_value
+
+    @field_validator("google_maps_link")
+    @classmethod
+    def validate_google_maps_link_field(cls, value):
+        if value is None:
+            return value
+        return validate_google_maps_link(value)

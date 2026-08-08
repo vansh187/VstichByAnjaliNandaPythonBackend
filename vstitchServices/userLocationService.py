@@ -17,7 +17,7 @@ class UserLocationUpdateError(Exception):
 
 class UserLocationService:
     """Business logic for POST /users/location: updates the authenticated
-    user's saved latitude/longitude."""
+    user's saved Google Maps link."""
 
     def __init__(self):
         try:
@@ -30,8 +30,7 @@ class UserLocationService:
         try:
             self.user_location_persistence.update_location(
                 vstitch_user_id,
-                update_location_request_dto.latitude,
-                update_location_request_dto.longitude,
+                update_location_request_dto.google_maps_link,
                 LOCATION_UPDATE_SOURCE,
             )
         except Exception as update_error:

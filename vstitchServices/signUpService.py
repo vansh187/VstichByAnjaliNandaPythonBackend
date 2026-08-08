@@ -20,10 +20,10 @@ class SignUpService:
 
         hashed_password = self.password_hash_service.hash_password(signup_request_dto.password)
 
-        # location is only ever present alongside location_permission_granted:
-        # true per the frontend contract, but read independently here rather
-        # than assuming that pairing - see SignupLocationDTO's comment.
-        location = signup_request_dto.location
+        # google_maps_link is only ever present alongside
+        # location_permission_granted: true per the frontend contract, but
+        # read independently here rather than assuming that pairing - see
+        # SignupRequestDTO's comment.
         inserted_row = self.signup_persistence.create_user(
             signup_request_dto.vstitch_user_name,
             hashed_password,
@@ -33,8 +33,7 @@ class SignUpService:
             signup_request_dto.phone_number,
             created_by_ip_address,
             location_permission_granted=signup_request_dto.location_permission_granted,
-            latitude=location.latitude if location is not None else None,
-            longitude=location.longitude if location is not None else None,
+            google_maps_link=signup_request_dto.google_maps_link,
         )
         vstitch_user_id, vstitch_user_name, email, _created_date = inserted_row
 
