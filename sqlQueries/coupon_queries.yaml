@@ -1,0 +1,54 @@
+insert_coupon: |
+  INSERT INTO VSTITCH_COUPONS
+      (CouponName, CouponCode, CouponDescription, DiscountType, DiscountValue, MinOrderAmount, IsActive, created_by)
+  VALUES
+      (%s, %s, %s, %s, %s, %s, %s, %s)
+  RETURNING VstitchCouponId;
+
+get_coupon_by_id: |
+  SELECT VstitchCouponId, CouponName, CouponCode, CouponDescription, DiscountType, DiscountValue, MinOrderAmount, IsActive
+  FROM VSTITCH_COUPONS
+  WHERE VstitchCouponId = %s;
+
+get_coupon_by_code: |
+  -- Case-insensitive: CreateCouponRequestDTO/ApplyCouponRequestDTO both
+  -- normalize to uppercase before this ever runs, but UPPER() here is a
+  -- second, DB-level safety net against a code inserted some other way.
+  SELECT VstitchCouponId, CouponName, CouponCode, CouponDescription, DiscountType, DiscountValue, MinOrderAmount, IsActive
+  FROM VSTITCH_COUPONS
+  WHERE UPPER(CouponCode) = UPPER(%s);
+
+list_coupons_admin: |
+  -- Keyset-paginated the same way as list_products_for_admin
+  -- (product_queries.yaml) - includes inactive coupons, since the admin
+  -- marketing screen needs to show/toggle those too, unlike the public
+  -- list_active_coupons_for_amount below.
+  SELECT VstitchCouponId, CouponName, CouponCode, CouponDescription, DiscountType, DiscountValue, MinOrderAmount, IsActive
+  FROM VSTITCH_COUPONS
+  WHERE (%(after_id)s::BIGINT IS NULL OR VstitchCouponId > %(after_id)s)
+  ORDER BY VstitchCouponId ASC
+  LIMIT %(limit_plus_one)s;
+
+list_active_coupons_for_amount: |
+  -- Price-based selection: only coupons currently switched on AND whose
+  -- minimum-order threshold the given cart total already meets - re-run
+  -- fresh on every call, never cached client-side as the source of truth.
+  SELECT VstitchCouponId, CouponName, CouponCode, CouponDescription, DiscountType, DiscountValue, MinOrderAmount, IsActive
+  FROM VSTITCH_COUPONS
+  WHERE IsActive = TRUE AND MinOrderAmount <= %s
+  ORDER BY MinOrderAmount DESC, VstitchCouponId ASC;
+
+update_coupon: |
+  -- CouponCode is deliberately not updatable here - see
+  -- UpdateCouponRequestDTO's comment.
+  UPDATE VSTITCH_COUPONS
+  SET CouponName = %(coupon_name)s,
+      CouponDescription = %(coupon_description)s,
+      DiscountType = %(discount_type)s,
+      DiscountValue = %(discount_value)s,
+      MinOrderAmount = %(min_order_amount)s,
+      IsActive = %(is_active)s,
+      updated_by = %(updated_by)s,
+      updated_date = CURRENT_TIMESTAMP
+  WHERE VstitchCouponId = %(vstitch_coupon_id)s
+  RETURNING VstitchCouponId;

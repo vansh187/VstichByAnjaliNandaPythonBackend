@@ -13,6 +13,7 @@ from vstitchServices.securityHeadersMiddleware import SecurityHeadersMiddleware
 from vstitchapi.adminAuditLogApi import admin_audit_log_router
 from vstitchapi.adminAuthApi import admin_auth_router
 from vstitchapi.adminCategoryApi import admin_category_router
+from vstitchapi.adminCouponApi import admin_coupon_router
 from vstitchapi.adminImageApi import admin_image_router
 from vstitchapi.adminOrderApi import admin_order_router
 from vstitchapi.adminProductApi import admin_product_router
@@ -21,6 +22,7 @@ from vstitchapi.adminRevenueApi import admin_revenue_router
 from vstitchapi.adminShipmentApi import admin_shipment_router
 from vstitchapi.bestSellerApi import best_seller_router
 from vstitchapi.categoryapi import category_router
+from vstitchapi.couponApi import coupon_router
 from vstitchapi.customizationInterestApi import customization_interest_router
 from vstitchapi.customizationRequestApi import customization_request_router
 from vstitchapi.googleAuthApi import google_auth_router
@@ -110,11 +112,13 @@ app.include_router(customization_request_router)
 app.include_router(customization_interest_router)
 app.include_router(subscriber_router)
 app.include_router(user_location_router)
+app.include_router(coupon_router)
 app.include_router(admin_auth_router)
 app.include_router(admin_audit_log_router)
 app.include_router(admin_order_router)
 app.include_router(admin_revenue_router)
 app.include_router(admin_category_router)
+app.include_router(admin_coupon_router)
 app.include_router(admin_image_router)
 app.include_router(admin_product_router)
 app.include_router(admin_return_router)
