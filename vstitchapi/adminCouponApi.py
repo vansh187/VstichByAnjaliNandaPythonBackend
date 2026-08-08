@@ -1,26 +1,28 @@
-from typing import Optional
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path
 
 from vstitchDatabase.couponPersistence import InvalidCouponError
 from vstitchDatabase.uniqueConstraintError import UniqueConstraintError
 from vstitchDTO.couponRequestDTO import CreateCouponRequestDTO, UpdateCouponRequestDTO
-from vstitchDTO.couponResponseDTO import CouponListResponseDTO, CouponResponseDTO
+from vstitchDTO.couponResponseDTO import CouponResponseDTO
 from vstitchServices.adminAuthDependency import get_current_admin
 from vstitchServices.couponService import CouponService
 
 
 class AdminCouponApi:
     """Exposes /admin/coupons - admin CRUD backing the "Active Coupons"
-    marketing screen. Admin-JWT-gated at the router level, same mechanism
-    as every other admin router.
+    marketing screen's "+ Add Coupon" flow. Admin-JWT-gated at the router
+    level (dependencies=[Depends(get_current_admin)]), same mechanism as
+    every other admin router - every route below requires a valid admin
+    bearer token before it runs at all, not just the write ones.
     """
 
     def __init__(self):
         self.coupon_service = CouponService()
         self.router = APIRouter(prefix="/admin", dependencies=[Depends(get_current_admin)])
         self.router.add_api_route(
-            "/coupons", self.list_coupons, methods=["GET"], response_model=CouponListResponseDTO
+            "/coupons", self.list_coupons, methods=["GET"], response_model=List[CouponResponseDTO]
         )
         self.router.add_api_route(
             "/coupons", self.create_coupon, methods=["POST"], response_model=CouponResponseDTO, status_code=201
@@ -32,13 +34,9 @@ class AdminCouponApi:
             "/coupons/{vstitch_coupon_id}", self.update_coupon, methods=["PATCH"], response_model=CouponResponseDTO
         )
 
-    def list_coupons(
-        self,
-        after_id: Optional[int] = Query(default=None, ge=1),
-        limit: int = Query(default=20, ge=1, le=100),
-    ):
+    def list_coupons(self):
         try:
-            return self.coupon_service.list_coupons_admin(after_id, limit)
+            return self.coupon_service.list_coupons_admin()
         except Exception:
             raise HTTPException(
                 status_code=500,

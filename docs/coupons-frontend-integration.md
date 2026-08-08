@@ -40,25 +40,37 @@ GET /coupons?order_amount=2500
 {
   "items": [
     {
-      "coupon_code": "FESTIVE10",
-      "coupon_name": "Festive 10",
-      "coupon_description": "10% off on orders above ₹2000",
+      "coupon_code": "FESTIVE20",
       "discount_type": "percentage",
-      "discount_value": 10.0,
-      "min_order_amount": 2000.0
+      "discount_value": 20.0,
+      "min_order_amount": 2000.0,
+      "max_discount_amount": null
     }
   ]
 }
 ```
 
 `items` is `[]` (not an error) when nothing currently qualifies — e.g. cart
-total below every active coupon's `min_order_amount`, or no coupons are
-active at all. Render that as "no coupons available right now", not as a
-failure state.
+total below every active coupon's `min_order_amount`, expired/not-yet-
+valid, usage limit already reached, or no coupons are active at all.
+Render that as "no coupons available right now", not as a failure state.
+
+There is no `coupon_name`/`coupon_description` — a coupon is identified
+purely by its `coupon_code`. Display the code itself (e.g. `"FESTIVE20"`)
+as the label.
 
 `discount_type` is either:
-- `"percentage"` — `discount_value` is a percent (e.g. `10.0` = 10% off)
-- `"flat"` — `discount_value` is a currency amount off (e.g. `150.0` = ₹150 off)
+- `"percentage"` — `discount_value` is a percent (e.g. `20.0` = 20% off).
+  `max_discount_amount`, if not `null`, caps how much that percentage can
+  actually discount in currency terms (e.g. "20% off, up to ₹500") — show
+  it as a "up to ₹X" qualifier if present.
+- `"flat"` — `discount_value` is a currency amount off (e.g. `150.0` =
+  ₹150 off). `max_discount_amount` is always `null` for a flat coupon —
+  irrelevant, since `discount_value` already is the fixed amount.
+
+`min_order_amount` is `null` when the coupon has no minimum at all — not
+the same as `0`, though both should be treated the same way in the UI
+("no threshold to show").
 
 ### Error response — `500`
 
@@ -99,7 +111,7 @@ Rate-limited to **20 requests/minute per IP**.
 POST /coupons/apply
 Content-Type: application/json
 
-{ "coupon_code": "festive10", "order_amount": 3000 }
+{ "coupon_code": "festive20", "order_amount": 3000 }
 ```
 
 | Field | Type | Rules |
@@ -111,7 +123,7 @@ Content-Type: application/json
 
 ```json
 {
-  "coupon_code": "FESTIVE10",
+  "coupon_code": "FESTIVE20",
   "discount_amount": 300.0,
   "final_amount": 2700.0,
   "message": "Coupon applied successfully."
@@ -119,9 +131,11 @@ Content-Type: application/json
 ```
 
 `discount_amount` and `final_amount` are the numbers to actually show/bill
-- computed server-side, already rounded to 2 decimal places. A `flat`
-coupon is automatically capped at the order total (never produces a
-negative `final_amount`).
+- computed server-side, already rounded to 2 decimal places, with
+`max_discount_amount` (if the coupon has one) already applied as a cap. A
+`flat` coupon, and any percentage coupon at any cap, is never allowed to
+discount past the order total itself (never produces a negative
+`final_amount`).
 
 ### Error responses
 
@@ -129,6 +143,9 @@ negative `final_amount`).
 |---|---|---|---|
 | 404 | `"Invalid coupon code."` | no coupon exists with that code | "This coupon code doesn't exist" |
 | 409 | `"This coupon is no longer active."` | coupon exists but has been switched off | "This coupon is no longer available" |
+| 409 | `"This coupon is not active yet."` | current time is before the coupon's `valid_from` | "This coupon isn't available yet" |
+| 409 | `"This coupon has expired."` | current time is past the coupon's `valid_until` | "This coupon has expired" |
+| 409 | `"This coupon has reached its usage limit."` | the coupon's `usage_limit` has already been fully redeemed | "This coupon is no longer available" |
 | 409 | `"This coupon requires a minimum order of 2000.00."` | cart total is below `min_order_amount` | show the message directly - it already states the threshold |
 | 422 | validation error array | missing `coupon_code`, or `order_amount` missing/not a positive number | shouldn't be reachable from normal UI flow (cart total is always positive) - treat as a generic "something went wrong" if it ever happens |
 | 429 | `"Too many requests - please try again shortly."` | more than 20 requests/minute from this client | "Please wait a moment and try again" |
@@ -176,6 +193,6 @@ validation errors (Pydantic's default shape), same as every other endpoint:
 
 *Generated from `vstitchapi/couponApi.py` and its DTOs
 (`vstitchDTO/applyCouponDTO.py`, `vstitchDTO/couponResponseDTO.py`) —
-Vstitch Backend. Backing table: `VSTITCH_COUPONS` (migration
-`vstitchDatabase/schema/migrations/0019_add_coupons.sql`, already applied
-to production).*
+Vstitch Backend. Backing table: `VSTITCH_COUPONS` (migrations
+`vstitchDatabase/schema/migrations/0019_add_coupons.sql` and
+`0020_redesign_coupons_schema.sql`, both already applied to production).*
